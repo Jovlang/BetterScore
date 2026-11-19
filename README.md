@@ -9,7 +9,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Continuous vertical PDF reading
 - Mouse, stylus, and Apple Pencil annotation input
 - Pressure-sensitive pen
-- Semi-transparent yellow marker
+- Semi-transparent yellow marker with a persistent right-click width menu
 - Positioned multiline text annotations
 - Stroke eraser
 - Undo and redo, including keyboard shortcuts

@@ -1,6 +1,7 @@
 import {
   App,
   FileView,
+  Menu,
   Modal,
   Notice,
   TFile,
@@ -18,6 +19,11 @@ import {
   TextAnnotation,
   createAnnotationDocument
 } from "./model";
+import {
+  HIGHLIGHTER_WIDTH_PRESETS,
+  highlighterWidthLabel,
+  nearlyEqual
+} from "./settings";
 
 export const VIEW_TYPE_BETTERSCORE = "betterscore-pdf";
 
@@ -63,8 +69,13 @@ export class BetterScoreView extends FileView {
   private scoreContainer: HTMLElement | null = null;
   private undoButton: HTMLButtonElement | null = null;
   private redoButton: HTMLButtonElement | null = null;
+  private markerButton: HTMLButtonElement | null = null;
 
-  constructor(leaf: WorkspaceLeaf) {
+  constructor(
+    leaf: WorkspaceLeaf,
+    private readonly getHighlighterWidth: () => number,
+    private readonly setHighlighterWidth: (width: number) => Promise<void>
+  ) {
     super(leaf);
     this.navigation = true;
     this.registerDomEvent(document, "keydown", (event) => this.handleHistoryShortcut(event));
@@ -133,7 +144,12 @@ export class BetterScoreView extends FileView {
   private renderToolbar(): void {
     this.toolbar = this.contentEl.createDiv({cls: "betterscore-toolbar"});
     this.addToolButton("pencil", "Pen", "pen");
-    this.addToolButton("highlighter", "Yellow marker", "highlighter");
+    this.markerButton = this.addToolButton("highlighter", "Yellow marker", "highlighter");
+    this.updateMarkerButton();
+    this.markerButton?.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      this.showMarkerWidthMenu(event);
+    });
     this.addToolButton("type", "Text", "text");
     this.addToolButton("eraser", "Eraser", "eraser");
     this.toolbar.createDiv({cls: "betterscore-toolbar-divider"});
@@ -148,12 +164,16 @@ export class BetterScoreView extends FileView {
     this.updateHistoryButtons();
   }
 
-  private addToolButton(icon: string, label: string, tool: ActiveTool): void {
+  private addToolButton(
+    icon: string,
+    label: string,
+    tool: ActiveTool
+  ): HTMLButtonElement | null {
     const button = this.toolbar?.createEl("button", {
       cls: "clickable-icon betterscore-tool",
       attr: {"aria-label": label, "data-tool": tool}
     });
-    if (!button) return;
+    if (!button) return null;
     setIcon(button, icon);
     if (tool === "highlighter") {
       button.createSpan({cls: "betterscore-marker-swatch"});
@@ -163,6 +183,37 @@ export class BetterScoreView extends FileView {
       this.tool = tool;
       this.updateToolButtons();
     });
+    return button;
+  }
+
+  private showMarkerWidthMenu(event: MouseEvent): void {
+    const current = this.getHighlighterWidth();
+    const menu = new Menu();
+    for (const preset of HIGHLIGHTER_WIDTH_PRESETS) {
+      menu.addItem((item) => {
+        item
+          .setTitle(preset.label)
+          .setChecked(nearlyEqual(current, preset.width))
+          .onClick(async () => {
+            await this.setHighlighterWidth(preset.width);
+            this.updateMarkerButton();
+          });
+      });
+    }
+    menu.showAtMouseEvent(event);
+  }
+
+  private updateMarkerButton(): void {
+    if (!this.markerButton) return;
+    const width = this.getHighlighterWidth();
+    const label = highlighterWidthLabel(width);
+    this.markerButton.setAttribute(
+      "aria-label",
+      `Yellow marker · ${label}. Right-click to set width.`
+    );
+    this.markerButton.setAttribute("title", `Marker width: ${label} · Right-click to change`);
+    const text = this.markerButton.querySelector<HTMLElement>(".betterscore-button-label");
+    if (text) text.textContent = `Yellow marker · ${label}`;
   }
 
   private addActionButton(
@@ -259,7 +310,7 @@ export class BetterScoreView extends FileView {
         tool: this.tool,
         color: this.tool === "highlighter" ? "#ffd60a" : "#e53935",
         opacity: this.tool === "highlighter" ? 0.2 : 0.92,
-        width: this.tool === "highlighter" ? 0.022 : 0.0045,
+        width: this.tool === "highlighter" ? this.getHighlighterWidth() : 0.0045,
         points: [point]
       };
       this.page(pageNumber).strokes.push(this.activeStroke);

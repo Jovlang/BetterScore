@@ -1,9 +1,20 @@
 import {Plugin, TFile, WorkspaceLeaf} from "obsidian";
 import {BetterScoreView, VIEW_TYPE_BETTERSCORE} from "./score-view";
+import {BetterScoreSettings, normalizeSettings} from "./settings";
 
 export default class BetterScorePlugin extends Plugin {
+  private pluginSettings: BetterScoreSettings = normalizeSettings(null);
+
   async onload(): Promise<void> {
-    this.registerView(VIEW_TYPE_BETTERSCORE, (leaf) => new BetterScoreView(leaf));
+    this.pluginSettings = normalizeSettings(await this.loadData());
+    this.registerView(
+      VIEW_TYPE_BETTERSCORE,
+      (leaf) => new BetterScoreView(
+        leaf,
+        () => this.pluginSettings.highlighterWidth,
+        (width) => this.setHighlighterWidth(width)
+      )
+    );
 
     this.addCommand({
       id: "open-active-pdf",
@@ -27,6 +38,14 @@ export default class BetterScorePlugin extends Plugin {
         });
       })
     );
+  }
+
+  private async setHighlighterWidth(width: number): Promise<void> {
+    this.pluginSettings = normalizeSettings({
+      ...this.pluginSettings,
+      highlighterWidth: width
+    });
+    await this.saveData(this.pluginSettings);
   }
 
   private async openScore(file: TFile, leaf?: WorkspaceLeaf): Promise<void> {
