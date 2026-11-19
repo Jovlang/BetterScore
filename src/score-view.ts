@@ -9,9 +9,10 @@ import {
   loadPdfJs,
   setIcon
 } from "obsidian";
-import {AnnotationStore} from "./annotation-store";
+import {AnnotationStore, PreparedAnnotationSave} from "./annotation-store";
 import {precisionErase, strokeIntersectsEraser} from "./eraser";
 import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
+import {SaveCoordinator} from "./save-coordinator";
 import {
   AnnotationDocument,
   AnnotationTool,
@@ -65,7 +66,7 @@ export class BetterScoreView extends FileView {
   private tool: ActiveTool = "pen";
   private undoStack: AnnotationDocument[] = [];
   private redoStack: AnnotationDocument[] = [];
-  private saveTimer: number | null = null;
+  private readonly saveCoordinator: SaveCoordinator<PreparedAnnotationSave>;
   private activeStroke: Stroke | null = null;
   private activePage: number | null = null;
   private toolbar: HTMLElement | null = null;
@@ -84,7 +85,15 @@ export class BetterScoreView extends FileView {
   ) {
     super(leaf);
     this.navigation = true;
+    this.saveCoordinator = new SaveCoordinator(
+      (prepared) => this.store.save(prepared),
+      500,
+      (error) => this.reportSaveError(error)
+    );
     this.registerDomEvent(document, "keydown", (event) => this.handleHistoryShortcut(event));
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "hidden") void this.flushSave();
+    });
   }
 
   getViewType(): string {
@@ -112,7 +121,7 @@ export class BetterScoreView extends FileView {
   }
 
   async onClose(): Promise<void> {
-    await this.flushSave();
+    await this.disposeSaveCoordinator();
     await this.destroyPdf();
   }
 
@@ -525,27 +534,28 @@ export class BetterScoreView extends FileView {
   }
 
   private scheduleSave(): void {
-    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => {
-      this.saveTimer = null;
-      void this.saveNow();
-    }, 500);
-  }
-
-  private async saveNow(): Promise<void> {
     if (!this.file) return;
-    try {
-      await this.store.save(this.file, this.annotations);
-    } catch (error) {
-      new Notice(`BetterScore could not save: ${messageOf(error)}`);
-    }
+    this.saveCoordinator.schedule(this.store.prepare(this.file, this.annotations));
   }
 
   private async flushSave(): Promise<void> {
-    if (this.saveTimer === null) return;
-    window.clearTimeout(this.saveTimer);
-    this.saveTimer = null;
-    await this.saveNow();
+    try {
+      await this.saveCoordinator.flush();
+    } catch (error) {
+      this.reportSaveError(error);
+    }
+  }
+
+  private async disposeSaveCoordinator(): Promise<void> {
+    try {
+      await this.saveCoordinator.dispose();
+    } catch (error) {
+      this.reportSaveError(error);
+    }
+  }
+
+  private reportSaveError(error: unknown): void {
+    new Notice(`BetterScore could not save: ${messageOf(error)}`);
   }
 
   private async destroyPdf(): Promise<void> {

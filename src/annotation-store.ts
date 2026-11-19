@@ -7,6 +7,11 @@ import {
   sidecarPath
 } from "./model";
 
+export interface PreparedAnnotationSave {
+  pdf: TFile;
+  serialized: string;
+}
+
 export class AnnotationStore {
   constructor(private readonly vault: Vault) {}
 
@@ -17,14 +22,17 @@ export class AnnotationStore {
     return parseAnnotationDocument(await this.vault.read(existing), pdf.path);
   }
 
-  async save(pdf: TFile, document: AnnotationDocument): Promise<void> {
-    const path = sidecarPath(pdf.path);
+  prepare(pdf: TFile, document: AnnotationDocument): PreparedAnnotationSave {
+    return {pdf, serialized: serializeAnnotationDocument(document)};
+  }
+
+  async save(prepared: PreparedAnnotationSave): Promise<void> {
+    const path = sidecarPath(prepared.pdf.path);
     const existing = this.vault.getAbstractFileByPath(path);
-    const serialized = serializeAnnotationDocument(document);
     if (existing instanceof TFile) {
-      await this.vault.modify(existing, serialized);
+      await this.vault.modify(existing, prepared.serialized);
     } else {
-      await this.vault.create(path, serialized);
+      await this.vault.create(path, prepared.serialized);
     }
   }
 }
