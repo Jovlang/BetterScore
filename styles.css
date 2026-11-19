@@ -104,6 +104,20 @@
   text-align: center;
 }
 
+.betterscore-text-modal textarea {
+  box-sizing: border-box;
+  min-height: 7rem;
+  resize: vertical;
+  width: 100%;
+}
+
+.betterscore-text-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 @media (max-width: 600px) {
   .betterscore-pages {
     gap: 8px;

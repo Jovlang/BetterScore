@@ -23,6 +23,16 @@ test("annotation documents round-trip", () => {
         width: 0.0045,
         points: [{x: 0.2, y: 0.3, pressure: 0.5}]
       }
+    ],
+    texts: [
+      {
+        id: "text-1",
+        x: 0.4,
+        y: 0.5,
+        text: "Watch the conductor",
+        color: "#e53935",
+        fontSize: 0.025
+      }
     ]
   };
   assert.deepEqual(
@@ -51,7 +61,7 @@ test("strokes without opacity receive a tool-appropriate default", () => {
   };
   const parsed = parseAnnotationDocument(JSON.stringify(legacy), "Score.pdf");
   assert.equal(parsed.pages["1"]?.strokes[0]?.opacity, 0.2);
-  assert.equal(parsed.version, 2);
+  assert.equal(parsed.version, 3);
 });
 
 test("version 1 highlighters migrate away from the dark segmented opacity", () => {
@@ -79,7 +89,7 @@ test("version 1 highlighters migrate away from the dark segmented opacity", () =
   };
   const parsed = parseAnnotationDocument(JSON.stringify(legacy), "Score.pdf");
   assert.equal(parsed.pages["1"]?.strokes[0]?.opacity, 0.2);
-  assert.equal(parsed.version, 2);
+  assert.equal(parsed.version, 3);
 });
 
 test("a sidecar cannot silently attach to a different PDF", () => {

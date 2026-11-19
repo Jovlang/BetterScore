@@ -1,4 +1,4 @@
-export const SIDECAR_VERSION = 2 as const;
+export const SIDECAR_VERSION = 3 as const;
 
 export type AnnotationTool = "pen" | "highlighter";
 
@@ -21,8 +21,20 @@ export interface Stroke {
   points: StrokePoint[];
 }
 
+export interface TextAnnotation {
+  id: string;
+  /** Top-left position normalized to the PDF page. */
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  /** Font size as a fraction of the rendered page width. */
+  fontSize: number;
+}
+
 export interface PageAnnotations {
   strokes: Stroke[];
+  texts: TextAnnotation[];
 }
 
 export interface AnnotationDocument {
@@ -50,7 +62,10 @@ export function parseAnnotationDocument(
   expectedSource: string
 ): AnnotationDocument {
   const value: unknown = JSON.parse(json);
-  if (!isRecord(value) || (value.version !== 1 && value.version !== SIDECAR_VERSION)) {
+  if (
+    !isRecord(value) ||
+    (value.version !== 1 && value.version !== 2 && value.version !== SIDECAR_VERSION)
+  ) {
     throw new Error("Unsupported BetterScore annotation format");
   }
   if (value.source !== expectedSource || !isRecord(value.pages)) {
@@ -60,11 +75,16 @@ export function parseAnnotationDocument(
   const sourceVersion = value.version;
   const pages: Record<string, PageAnnotations> = {};
   for (const [page, annotations] of Object.entries(value.pages)) {
-    if (!isRecord(annotations) || !Array.isArray(annotations.strokes)) continue;
+    if (!isRecord(annotations)) continue;
+    const strokes = Array.isArray(annotations.strokes) ? annotations.strokes : [];
+    const texts = Array.isArray(annotations.texts) ? annotations.texts : [];
     pages[page] = {
-      strokes: annotations.strokes
+      strokes: strokes
         .map((stroke) => parseStroke(stroke, sourceVersion))
-        .filter((stroke): stroke is Stroke => stroke !== null)
+        .filter((stroke): stroke is Stroke => stroke !== null),
+      texts: texts
+        .map(parseTextAnnotation)
+        .filter((text): text is TextAnnotation => text !== null)
     };
   }
 
@@ -73,6 +93,28 @@ export function parseAnnotationDocument(
     source: expectedSource,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date(0).toISOString(),
     pages
+  };
+}
+
+function parseTextAnnotation(value: unknown): TextAnnotation | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.x !== "number" ||
+    typeof value.y !== "number" ||
+    typeof value.text !== "string" ||
+    typeof value.color !== "string" ||
+    typeof value.fontSize !== "number"
+  ) {
+    return null;
+  }
+  return {
+    id: value.id,
+    x: Math.max(0, Math.min(1, value.x)),
+    y: Math.max(0, Math.min(1, value.y)),
+    text: value.text,
+    color: value.color,
+    fontSize: Math.max(0.008, Math.min(0.1, value.fontSize))
   };
 }
 

@@ -1,5 +1,7 @@
 import {
+  App,
   FileView,
+  Modal,
   Notice,
   TFile,
   WorkspaceLeaf,
@@ -10,14 +12,16 @@ import {AnnotationStore} from "./annotation-store";
 import {
   AnnotationDocument,
   AnnotationTool,
+  PageAnnotations,
   Stroke,
   StrokePoint,
+  TextAnnotation,
   createAnnotationDocument
 } from "./model";
 
 export const VIEW_TYPE_BETTERSCORE = "betterscore-pdf";
 
-type ActiveTool = AnnotationTool | "eraser";
+type ActiveTool = AnnotationTool | "eraser" | "text";
 
 interface PdfViewport {
   width: number;
@@ -130,6 +134,7 @@ export class BetterScoreView extends FileView {
     this.toolbar = this.contentEl.createDiv({cls: "betterscore-toolbar"});
     this.addToolButton("pencil", "Pen", "pen");
     this.addToolButton("highlighter", "Yellow marker", "highlighter");
+    this.addToolButton("type", "Text", "text");
     this.addToolButton("eraser", "Eraser", "eraser");
     this.toolbar.createDiv({cls: "betterscore-toolbar-divider"});
     this.undoButton = this.addActionButton("undo-2", "Undo", "Ctrl/⌘ Z", () => this.undo());
@@ -228,15 +233,22 @@ export class BetterScoreView extends FileView {
     const {overlay, pageNumber} = surface;
     overlay.addEventListener("pointerdown", (event) => {
       // A finger navigates the score; Pencil/stylus and mouse create annotations.
-      if (event.pointerType === "touch") return;
+      if (event.pointerType === "touch" && this.tool !== "text") return;
       if (event.button !== 0 && event.pointerType === "mouse") return;
       event.preventDefault();
+
+      const point = this.pointFromEvent(event, overlay);
+      if (this.tool === "text") {
+        this.openTextInput(pageNumber, point);
+        return;
+      }
+
       overlay.setPointerCapture(event.pointerId);
 
       if (this.tool === "eraser") {
         this.pushUndoState();
         this.activePage = pageNumber;
-        this.eraseAt(pageNumber, this.pointFromEvent(event, overlay));
+        this.eraseAt(pageNumber, point);
         return;
       }
 
@@ -248,7 +260,7 @@ export class BetterScoreView extends FileView {
         color: this.tool === "highlighter" ? "#ffd60a" : "#e53935",
         opacity: this.tool === "highlighter" ? 0.2 : 0.92,
         width: this.tool === "highlighter" ? 0.022 : 0.0045,
-        points: [this.pointFromEvent(event, overlay)]
+        points: [point]
       };
       this.page(pageNumber).strokes.push(this.activeStroke);
       this.drawPage(pageNumber);
@@ -288,13 +300,17 @@ export class BetterScoreView extends FileView {
 
   private eraseAt(pageNumber: number, point: StrokePoint): void {
     const page = this.page(pageNumber);
-    const before = page.strokes.length;
+    const before = page.strokes.length + page.texts.length;
     const radius = 0.025;
-    const remaining = page.strokes.filter(
+    const remainingStrokes = page.strokes.filter(
       (stroke) => !stroke.points.some((candidate) => distance(candidate, point) < radius)
     );
-    if (remaining.length === before) return;
-    page.strokes = remaining;
+    const remainingTexts = page.texts.filter(
+      (text) => Math.hypot(text.x - point.x, text.y - point.y) >= 0.045
+    );
+    if (remainingStrokes.length + remainingTexts.length === before) return;
+    page.strokes = remainingStrokes;
+    page.texts = remainingTexts;
     this.activePage = pageNumber;
     this.drawPage(pageNumber);
     this.scheduleSave();
@@ -309,11 +325,32 @@ export class BetterScoreView extends FileView {
     for (const stroke of this.page(pageNumber).strokes) {
       drawStroke(context, stroke, bounds.width, bounds.height);
     }
+    for (const text of this.page(pageNumber).texts) {
+      drawTextAnnotation(context, text, bounds.width, bounds.height);
+    }
   }
 
-  private page(pageNumber: number): {strokes: Stroke[]} {
+  private page(pageNumber: number): PageAnnotations {
     const key = String(pageNumber);
-    return (this.annotations.pages[key] ??= {strokes: []});
+    return (this.annotations.pages[key] ??= {strokes: [], texts: []});
+  }
+
+  private openTextInput(pageNumber: number, point: StrokePoint): void {
+    new TextAnnotationModal(this.app, (value) => {
+      const text = value.trim();
+      if (!text) return;
+      this.pushUndoState();
+      this.page(pageNumber).texts.push({
+        id: crypto.randomUUID(),
+        x: point.x,
+        y: point.y,
+        text,
+        color: "#e53935",
+        fontSize: 0.025
+      });
+      this.drawPage(pageNumber);
+      this.scheduleSave();
+    }).open();
   }
 
   private pushUndoState(): void {
@@ -447,6 +484,71 @@ function drawStroke(
     }
   }
   context.restore();
+}
+
+function drawTextAnnotation(
+  context: CanvasRenderingContext2D,
+  annotation: TextAnnotation,
+  width: number,
+  height: number
+): void {
+  const fontSize = annotation.fontSize * width;
+  context.save();
+  context.fillStyle = annotation.color;
+  context.globalAlpha = 0.95;
+  context.font = `600 ${fontSize}px sans-serif`;
+  context.textBaseline = "top";
+  annotation.text.split("\n").forEach((line, index) => {
+    context.fillText(
+      line,
+      annotation.x * width,
+      annotation.y * height + index * fontSize * 1.2
+    );
+  });
+  context.restore();
+}
+
+class TextAnnotationModal extends Modal {
+  constructor(
+    app: App,
+    private readonly onSubmit: (text: string) => void
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.contentEl.addClass("betterscore-text-modal");
+    this.contentEl.createEl("h3", {text: "Add text"});
+    const input = this.contentEl.createEl("textarea", {
+      attr: {
+        rows: "4",
+        placeholder: "Rehearsal note…",
+        "aria-label": "Annotation text"
+      }
+    });
+    const actions = this.contentEl.createDiv({cls: "betterscore-text-actions"});
+    const cancel = actions.createEl("button", {text: "Cancel"});
+    const add = actions.createEl("button", {cls: "mod-cta", text: "Add text"});
+
+    const submit = (): void => {
+      if (!input.value.trim()) return;
+      this.onSubmit(input.value);
+      this.close();
+    };
+    cancel.addEventListener("click", () => this.close());
+    add.addEventListener("click", submit);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        submit();
+      }
+    });
+    window.setTimeout(() => input.focus(), 0);
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
 }
 
 function distance(left: StrokePoint, right: StrokePoint): number {

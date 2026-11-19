@@ -10,6 +10,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Mouse, stylus, and Apple Pencil annotation input
 - Pressure-sensitive pen
 - Semi-transparent yellow marker
+- Positioned multiline text annotations
 - Stroke eraser
 - Undo and redo, including keyboard shortcuts
 - Automatic sidecar saving
