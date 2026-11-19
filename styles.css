@@ -1,0 +1,116 @@
+.betterscore-view {
+  --betterscore-toolbar-height: 46px;
+  height: 100%;
+  overflow: hidden;
+  padding: 0 !important;
+  background: var(--background-secondary);
+}
+
+.betterscore-toolbar {
+  align-items: center;
+  background: color-mix(in srgb, var(--background-primary) 92%, transparent);
+  border-bottom: 1px solid var(--background-modifier-border);
+  display: flex;
+  gap: 4px;
+  height: var(--betterscore-toolbar-height);
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 10px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.betterscore-toolbar button {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  justify-content: center;
+  min-width: auto;
+  padding: 5px 8px;
+  width: auto;
+}
+
+.betterscore-toolbar-divider {
+  align-self: stretch;
+  border-left: 1px solid var(--background-modifier-border);
+  flex: 0 0 auto;
+  margin: 8px 4px;
+}
+
+.betterscore-button-label {
+  font-size: var(--font-ui-small);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.betterscore-marker-swatch {
+  background: rgb(255 214 10 / 55%);
+  border: 1px solid rgb(180 140 0 / 55%);
+  border-radius: 2px;
+  display: inline-block;
+  height: 12px;
+  width: 12px;
+}
+
+.betterscore-tool.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.betterscore-history-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.betterscore-pages {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: calc(100% - var(--betterscore-toolbar-height));
+  overflow: auto;
+  padding: 16px;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+.betterscore-page {
+  background: white;
+  box-shadow: 0 3px 18px rgb(0 0 0 / 20%);
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.betterscore-pdf-canvas,
+.betterscore-ink-canvas {
+  display: block;
+  inset: 0;
+  position: absolute;
+}
+
+.betterscore-ink-canvas {
+  cursor: crosshair;
+  touch-action: pan-y pinch-zoom;
+}
+
+.betterscore-loading,
+.betterscore-error {
+  color: var(--text-muted);
+  margin: auto;
+  max-width: 36rem;
+  padding: 3rem 1rem;
+  text-align: center;
+}
+
+@media (max-width: 600px) {
+  .betterscore-pages {
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .betterscore-toolbar {
+    padding: 0 6px;
+  }
+}
