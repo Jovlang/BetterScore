@@ -5,6 +5,27 @@ export interface EraseResult {
   changed: boolean;
 }
 
+/** Test the visible polyline, not only its stored/simplified sample points. */
+export function strokeIntersectsEraser(
+  stroke: Stroke,
+  center: StrokePoint,
+  radius: number
+): boolean {
+  const first = stroke.points[0];
+  if (!first) return false;
+  const effectiveRadius = radius + stroke.width / 2;
+  if (stroke.points.length === 1) return distance(first, center) <= effectiveRadius;
+
+  for (let index = 1; index < stroke.points.length; index += 1) {
+    const start = stroke.points[index - 1];
+    const end = stroke.points[index];
+    if (start && end && pointToSegmentDistance(center, start, end) <= effectiveRadius) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Remove only the portion of each stroke covered by a circular eraser. */
 export function precisionErase(
   strokes: Stroke[],
@@ -77,4 +98,22 @@ function densify(points: StrokePoint[], maximumStep: number): StrokePoint[] {
 
 function distance(left: StrokePoint, right: StrokePoint): number {
   return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
+function pointToSegmentDistance(
+  point: StrokePoint,
+  start: StrokePoint,
+  end: StrokePoint
+): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (dx === 0 && dy === 0) return distance(point, start);
+  const progress = Math.max(
+    0,
+    Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy))
+  );
+  return Math.hypot(
+    point.x - (start.x + progress * dx),
+    point.y - (start.y + progress * dy)
+  );
 }

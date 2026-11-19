@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {precisionErase} from "../src/eraser";
+import {precisionErase, strokeIntersectsEraser} from "../src/eraser";
 import {Stroke} from "../src/model";
 
 function horizontalStroke(): Stroke {
@@ -34,4 +34,20 @@ test("precision eraser preserves untouched strokes", () => {
   const result = precisionErase([stroke], {x: 0.5, y: 0.8, pressure: 0.5}, 0.02);
   assert.equal(result.changed, false);
   assert.equal(result.strokes[0], stroke);
+});
+
+test("stroke eraser hits the middle of a two-point simplified line", () => {
+  const stroke = horizontalStroke();
+  assert.equal(
+    strokeIntersectsEraser(stroke, {x: 0.5, y: 0.5, pressure: 0.5}, 0.01),
+    true
+  );
+});
+
+test("stroke eraser ignores a point away from every line segment", () => {
+  const stroke = horizontalStroke();
+  assert.equal(
+    strokeIntersectsEraser(stroke, {x: 0.5, y: 0.7, pressure: 0.5}, 0.01),
+    false
+  );
 });

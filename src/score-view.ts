@@ -10,7 +10,7 @@ import {
   setIcon
 } from "obsidian";
 import {AnnotationStore} from "./annotation-store";
-import {precisionErase} from "./eraser";
+import {precisionErase, strokeIntersectsEraser} from "./eraser";
 import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
 import {
   AnnotationDocument,
@@ -416,7 +416,7 @@ export class BetterScoreView extends FileView {
     const radius = precision ? 0.012 : 0.025;
     const precisionResult = precision ? precisionErase(page.strokes, point, radius) : null;
     const remainingStrokes = precisionResult?.strokes ?? page.strokes.filter(
-      (stroke) => !stroke.points.some((candidate) => distance(candidate, point) < radius)
+      (stroke) => !strokeIntersectsEraser(stroke, point, radius)
     );
     const remainingTexts = page.texts.filter(
       (text) => Math.hypot(text.x - point.x, text.y - point.y) >= 0.045
@@ -665,10 +665,6 @@ class TextAnnotationModal extends Modal {
   onClose(): void {
     this.contentEl.empty();
   }
-}
-
-function distance(left: StrokePoint, right: StrokePoint): number {
-  return Math.hypot(left.x - right.x, left.y - right.y);
 }
 
 function clamp(value: number): number {
