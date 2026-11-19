@@ -3,6 +3,7 @@ import {
   AnnotationDocument,
   createAnnotationDocument,
   parseAnnotationDocument,
+  serializeAnnotationDocument,
   sidecarPath
 } from "./model";
 
@@ -19,11 +20,7 @@ export class AnnotationStore {
   async save(pdf: TFile, document: AnnotationDocument): Promise<void> {
     const path = sidecarPath(pdf.path);
     const existing = this.vault.getAbstractFileByPath(path);
-    const serialized = JSON.stringify(
-      {...document, updatedAt: new Date().toISOString()},
-      null,
-      2
-    );
+    const serialized = serializeAnnotationDocument(document);
     if (existing instanceof TFile) {
       await this.vault.modify(existing, serialized);
     } else {

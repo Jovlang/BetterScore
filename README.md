@@ -15,6 +15,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Persistent stroke and precision eraser modes from the Eraser button's right-click menu
 - Undo and redo, including keyboard shortcuts
 - Automatic sidecar saving
+- Compact tuple-based sidecars with live sample filtering and stroke simplification
 - Desktop and mobile support
 
 BetterScore is currently an early prototype.

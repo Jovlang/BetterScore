@@ -11,6 +11,7 @@ import {
 } from "obsidian";
 import {AnnotationStore} from "./annotation-store";
 import {precisionErase} from "./eraser";
+import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
 import {
   AnnotationDocument,
   AnnotationTool,
@@ -366,8 +367,11 @@ export class BetterScoreView extends FileView {
       if (this.tool === "eraser") {
         this.eraseAt(pageNumber, point);
       } else if (this.activeStroke && this.activePage === pageNumber) {
-        this.activeStroke.points.push(point);
-        this.drawPage(pageNumber);
+        const previous = this.activeStroke.points[this.activeStroke.points.length - 1];
+        if (!previous || shouldRecordSample(previous, point)) {
+          this.activeStroke.points.push(point);
+          this.drawPage(pageNumber);
+        }
       }
     });
 
@@ -375,7 +379,21 @@ export class BetterScoreView extends FileView {
       if (overlay.hasPointerCapture(event.pointerId)) {
         overlay.releasePointerCapture(event.pointerId);
       }
-      if (this.activeStroke) this.scheduleSave();
+      if (this.activeStroke) {
+        if (event.type === "pointerup") {
+          const finalPoint = this.pointFromEvent(event, overlay);
+          const previous = this.activeStroke.points[this.activeStroke.points.length - 1];
+          if (!previous || shouldRecordSample(previous, finalPoint)) {
+            this.activeStroke.points.push(finalPoint);
+          }
+        }
+        this.activeStroke.points = simplifyStrokePoints(
+          this.activeStroke.points,
+          this.activeStroke.tool
+        );
+        this.drawPage(pageNumber);
+        this.scheduleSave();
+      }
       this.activeStroke = null;
       this.activePage = null;
     };

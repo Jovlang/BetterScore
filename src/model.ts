@@ -1,4 +1,6 @@
-export const SIDECAR_VERSION = 3 as const;
+import {simplifyStrokePoints} from "./simplify";
+
+export const SIDECAR_VERSION = 4 as const;
 
 export type AnnotationTool = "pen" | "highlighter";
 
@@ -64,7 +66,10 @@ export function parseAnnotationDocument(
   const value: unknown = JSON.parse(json);
   if (
     !isRecord(value) ||
-    (value.version !== 1 && value.version !== 2 && value.version !== SIDECAR_VERSION)
+    (value.version !== 1 &&
+      value.version !== 2 &&
+      value.version !== 3 &&
+      value.version !== SIDECAR_VERSION)
   ) {
     throw new Error("Unsupported BetterScore annotation format");
   }
@@ -96,6 +101,43 @@ export function parseAnnotationDocument(
   };
 }
 
+export function serializeAnnotationDocument(
+  document: AnnotationDocument,
+  updatedAt = new Date().toISOString()
+): string {
+  const pages = Object.fromEntries(
+    Object.entries(document.pages).map(([pageNumber, page]) => [
+      pageNumber,
+      {
+        strokes: page.strokes.map((stroke) => ({
+          id: stroke.id,
+          tool: stroke.tool,
+          color: stroke.color,
+          opacity: round(stroke.opacity, 3),
+          width: round(stroke.width, 5),
+          points: simplifyStrokePoints(stroke.points, stroke.tool).map((point) => [
+            round(point.x, 5),
+            round(point.y, 5),
+            round(point.pressure, 3)
+          ])
+        })),
+        texts: page.texts.map((text) => ({
+          ...text,
+          x: round(text.x, 5),
+          y: round(text.y, 5),
+          fontSize: round(text.fontSize, 5)
+        }))
+      }
+    ])
+  );
+  return JSON.stringify({
+    version: SIDECAR_VERSION,
+    source: document.source,
+    updatedAt,
+    pages
+  });
+}
+
 function parseTextAnnotation(value: unknown): TextAnnotation | null {
   if (
     !isRecord(value) ||
@@ -124,11 +166,12 @@ function parseStroke(value: unknown, sourceVersion: number): Stroke | null {
   if (
     typeof value.id !== "string" ||
     typeof value.color !== "string" ||
-    typeof value.width !== "number" ||
-    !value.points.every(isStrokePoint)
+    typeof value.width !== "number"
   ) {
     return null;
   }
+  const points = value.points.map(parseStrokePoint);
+  if (points.some((point) => point === null)) return null;
 
   return {
     id: value.id,
@@ -142,17 +185,33 @@ function parseStroke(value: unknown, sourceVersion: number): Stroke | null {
           ? 0.2
           : 0.92,
     width: value.width,
-    points: value.points
+    points: points.filter((point): point is StrokePoint => point !== null)
   };
 }
 
-function isStrokePoint(value: unknown): value is StrokePoint {
-  return (
+function parseStrokePoint(value: unknown): StrokePoint | null {
+  if (
+    Array.isArray(value) &&
+    typeof value[0] === "number" &&
+    typeof value[1] === "number" &&
+    typeof value[2] === "number"
+  ) {
+    return {x: value[0], y: value[1], pressure: value[2]};
+  }
+  if (
     isRecord(value) &&
     typeof value.x === "number" &&
     typeof value.y === "number" &&
     typeof value.pressure === "number"
-  );
+  ) {
+    return {x: value.x, y: value.y, pressure: value.pressure};
+  }
+  return null;
+}
+
+function round(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
