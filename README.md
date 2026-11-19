@@ -12,6 +12,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Semi-transparent yellow marker with a persistent right-click width menu
 - Positioned multiline text annotations
 - Stroke eraser
+- Persistent stroke and precision eraser modes from the Eraser button's right-click menu
 - Undo and redo, including keyboard shortcuts
 - Automatic sidecar saving
 - Desktop and mobile support

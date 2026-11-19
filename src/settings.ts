@@ -1,9 +1,13 @@
+export type EraserMode = "stroke" | "precision";
+
 export interface BetterScoreSettings {
   highlighterWidth: number;
+  eraserMode: EraserMode;
 }
 
 export const DEFAULT_SETTINGS: BetterScoreSettings = {
-  highlighterWidth: 0.022
+  highlighterWidth: 0.022,
+  eraserMode: "stroke"
 };
 
 export const HIGHLIGHTER_WIDTH_PRESETS = [
@@ -18,7 +22,8 @@ export function normalizeSettings(value: unknown): BetterScoreSettings {
     return {...DEFAULT_SETTINGS};
   }
   return {
-    highlighterWidth: Math.max(0.008, Math.min(0.08, value.highlighterWidth))
+    highlighterWidth: Math.max(0.008, Math.min(0.08, value.highlighterWidth)),
+    eraserMode: value.eraserMode === "precision" ? "precision" : "stroke"
   };
 }
 

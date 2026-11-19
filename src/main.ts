@@ -1,6 +1,6 @@
 import {Plugin, TFile, WorkspaceLeaf} from "obsidian";
 import {BetterScoreView, VIEW_TYPE_BETTERSCORE} from "./score-view";
-import {BetterScoreSettings, normalizeSettings} from "./settings";
+import {BetterScoreSettings, EraserMode, normalizeSettings} from "./settings";
 
 export default class BetterScorePlugin extends Plugin {
   private pluginSettings: BetterScoreSettings = normalizeSettings(null);
@@ -12,7 +12,9 @@ export default class BetterScorePlugin extends Plugin {
       (leaf) => new BetterScoreView(
         leaf,
         () => this.pluginSettings.highlighterWidth,
-        (width) => this.setHighlighterWidth(width)
+        (width) => this.setHighlighterWidth(width),
+        () => this.pluginSettings.eraserMode,
+        (mode) => this.setEraserMode(mode)
       )
     );
 
@@ -45,6 +47,11 @@ export default class BetterScorePlugin extends Plugin {
       ...this.pluginSettings,
       highlighterWidth: width
     });
+    await this.saveData(this.pluginSettings);
+  }
+
+  private async setEraserMode(mode: EraserMode): Promise<void> {
+    this.pluginSettings = normalizeSettings({...this.pluginSettings, eraserMode: mode});
     await this.saveData(this.pluginSettings);
   }
 

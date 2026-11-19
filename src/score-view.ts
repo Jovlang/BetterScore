@@ -10,6 +10,7 @@ import {
   setIcon
 } from "obsidian";
 import {AnnotationStore} from "./annotation-store";
+import {precisionErase} from "./eraser";
 import {
   AnnotationDocument,
   AnnotationTool,
@@ -21,6 +22,7 @@ import {
 } from "./model";
 import {
   HIGHLIGHTER_WIDTH_PRESETS,
+  EraserMode,
   highlighterWidthLabel,
   nearlyEqual
 } from "./settings";
@@ -70,11 +72,14 @@ export class BetterScoreView extends FileView {
   private undoButton: HTMLButtonElement | null = null;
   private redoButton: HTMLButtonElement | null = null;
   private markerButton: HTMLButtonElement | null = null;
+  private eraserButton: HTMLButtonElement | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
     private readonly getHighlighterWidth: () => number,
-    private readonly setHighlighterWidth: (width: number) => Promise<void>
+    private readonly setHighlighterWidth: (width: number) => Promise<void>,
+    private readonly getEraserMode: () => EraserMode,
+    private readonly setEraserMode: (mode: EraserMode) => Promise<void>
   ) {
     super(leaf);
     this.navigation = true;
@@ -151,7 +156,12 @@ export class BetterScoreView extends FileView {
       this.showMarkerWidthMenu(event);
     });
     this.addToolButton("type", "Text", "text");
-    this.addToolButton("eraser", "Eraser", "eraser");
+    this.eraserButton = this.addToolButton("eraser", "Eraser", "eraser");
+    this.updateEraserButton();
+    this.eraserButton?.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      this.showEraserModeMenu(event);
+    });
     this.toolbar.createDiv({cls: "betterscore-toolbar-divider"});
     this.undoButton = this.addActionButton("undo-2", "Undo", "Ctrl/⌘ Z", () => this.undo());
     this.redoButton = this.addActionButton(
@@ -214,6 +224,39 @@ export class BetterScoreView extends FileView {
     this.markerButton.setAttribute("title", `Marker width: ${label} · Right-click to change`);
     const text = this.markerButton.querySelector<HTMLElement>(".betterscore-button-label");
     if (text) text.textContent = `Yellow marker · ${label}`;
+  }
+
+  private showEraserModeMenu(event: MouseEvent): void {
+    const current = this.getEraserMode();
+    const menu = new Menu();
+    const choices: Array<{mode: EraserMode; label: string}> = [
+      {mode: "stroke", label: "Stroke eraser"},
+      {mode: "precision", label: "Precision eraser"}
+    ];
+    for (const choice of choices) {
+      menu.addItem((item) => {
+        item
+          .setTitle(choice.label)
+          .setChecked(current === choice.mode)
+          .onClick(async () => {
+            await this.setEraserMode(choice.mode);
+            this.updateEraserButton();
+          });
+      });
+    }
+    menu.showAtMouseEvent(event);
+  }
+
+  private updateEraserButton(): void {
+    if (!this.eraserButton) return;
+    const label = this.getEraserMode() === "precision" ? "Precision" : "Stroke";
+    this.eraserButton.setAttribute(
+      "aria-label",
+      `Eraser · ${label}. Right-click to change mode.`
+    );
+    this.eraserButton.setAttribute("title", `Eraser mode: ${label} · Right-click to change`);
+    const text = this.eraserButton.querySelector<HTMLElement>(".betterscore-button-label");
+    if (text) text.textContent = `Eraser · ${label}`;
   }
 
   private addActionButton(
@@ -351,15 +394,19 @@ export class BetterScoreView extends FileView {
 
   private eraseAt(pageNumber: number, point: StrokePoint): void {
     const page = this.page(pageNumber);
-    const before = page.strokes.length + page.texts.length;
-    const radius = 0.025;
-    const remainingStrokes = page.strokes.filter(
+    const precision = this.getEraserMode() === "precision";
+    const radius = precision ? 0.012 : 0.025;
+    const precisionResult = precision ? precisionErase(page.strokes, point, radius) : null;
+    const remainingStrokes = precisionResult?.strokes ?? page.strokes.filter(
       (stroke) => !stroke.points.some((candidate) => distance(candidate, point) < radius)
     );
     const remainingTexts = page.texts.filter(
       (text) => Math.hypot(text.x - point.x, text.y - point.y) >= 0.045
     );
-    if (remainingStrokes.length + remainingTexts.length === before) return;
+    const textChanged = remainingTexts.length !== page.texts.length;
+    const strokeChanged = precisionResult?.changed
+      ?? remainingStrokes.length !== page.strokes.length;
+    if (!strokeChanged && !textChanged) return;
     page.strokes = remainingStrokes;
     page.texts = remainingTexts;
     this.activePage = pageNumber;
