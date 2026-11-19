@@ -44,6 +44,16 @@ For a PDF named `Requiem.pdf`, BetterScore creates `Requiem.betterscore.json`. C
 
 The format is versioned and migrations are handled when sidecars are loaded.
 
+## Roadmap
+
+- [ ] Add viewport-based lazy rendering for large scores and mobile memory limits
+- [ ] Add a view-mode switch between continuous vertical scrolling and page-by-page flipping
+- [ ] Add a dual-page spread for landscape screens with correct left/right page pairing
+- [ ] Preserve the current page when switching viewing modes
+- [ ] Advance dual-page spreads by two pages while allowing single-page correction
+- [ ] Support click, swipe, keyboard, and later pedal-based page turns
+- [ ] Add zoom, thumbnails, and flattened PDF export
+
 ## License
 
 BetterScore is free software licensed under the [GNU General Public License v3.0 only](LICENSE).
