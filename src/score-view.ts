@@ -17,11 +17,13 @@ import {
   AnnotationDocument,
   AnnotationTool,
   PageAnnotations,
+  SourceFingerprintMismatchError,
   Stroke,
   StrokePoint,
   TextAnnotation,
   createAnnotationDocument
 } from "./model";
+import {createSourceIdentity} from "./source-identity";
 import {
   HIGHLIGHTER_WIDTH_PRESETS,
   EraserMode,
@@ -61,7 +63,13 @@ interface PageSurface {
 export class BetterScoreView extends FileView {
   private readonly store = new AnnotationStore(this.app.vault);
   private pdf: PdfDocument | null = null;
-  private annotations: AnnotationDocument = createAnnotationDocument("");
+  private annotations: AnnotationDocument = createAnnotationDocument({
+    path: "",
+    fingerprint: "",
+    size: 0
+  });
+  private annotationsWritable = true;
+  private annotationBlockReason = "";
   private surfaces = new Map<number, PageSurface>();
   private tool: ActiveTool = "pen";
   private undoStack: AnnotationDocument[] = [];
@@ -128,6 +136,8 @@ export class BetterScoreView extends FileView {
   private async openScore(file: TFile): Promise<void> {
     this.undoStack = [];
     this.redoStack = [];
+    this.annotationsWritable = true;
+    this.annotationBlockReason = "";
     this.contentEl.empty();
     this.contentEl.addClass("betterscore-view");
     this.renderToolbar();
@@ -135,15 +145,19 @@ export class BetterScoreView extends FileView {
     this.scoreContainer.createDiv({cls: "betterscore-loading", text: "Loading score…"});
 
     try {
-      this.annotations = await this.store.load(file);
-    } catch (error) {
-      this.annotations = createAnnotationDocument(file.path);
-      new Notice(`BetterScore could not read the annotations: ${messageOf(error)}`);
-    }
-
-    try {
       const pdfjs = await loadPdfJs();
       const data = await this.app.vault.readBinary(file);
+      const source = await createSourceIdentity(file.path, data);
+      try {
+        this.annotations = await this.store.load(file, source);
+      } catch (error) {
+        this.annotations = createAnnotationDocument(source);
+        this.annotationsWritable = false;
+        this.annotationBlockReason = error instanceof SourceFingerprintMismatchError
+          ? "This PDF does not match the annotation sidecar. Existing annotations were preserved."
+          : `The annotation sidecar could not be read. Existing data was preserved: ${messageOf(error)}`;
+        new Notice(`BetterScore: ${this.annotationBlockReason}`);
+      }
       this.pdf = (await pdfjs.getDocument({data}).promise) as PdfDocument;
       this.scoreContainer.empty();
       await this.renderPages();
@@ -339,6 +353,10 @@ export class BetterScoreView extends FileView {
       // A finger navigates the score; Pencil/stylus and mouse create annotations.
       if (event.pointerType === "touch" && this.tool !== "text") return;
       if (event.button !== 0 && event.pointerType === "mouse") return;
+      if (!this.annotationsWritable) {
+        new Notice(`BetterScore: ${this.annotationBlockReason}`);
+        return;
+      }
       event.preventDefault();
 
       const point = this.pointFromEvent(event, overlay);
@@ -534,7 +552,7 @@ export class BetterScoreView extends FileView {
   }
 
   private scheduleSave(): void {
-    if (!this.file) return;
+    if (!this.file || !this.annotationsWritable) return;
     this.saveCoordinator.schedule(this.store.prepare(this.file, this.annotations));
   }
 

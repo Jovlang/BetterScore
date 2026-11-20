@@ -1,4 +1,5 @@
-import {Plugin, TFile, WorkspaceLeaf} from "obsidian";
+import {Notice, Plugin, TFile, WorkspaceLeaf} from "obsidian";
+import {AnnotationStore} from "./annotation-store";
 import {BetterScoreView, VIEW_TYPE_BETTERSCORE} from "./score-view";
 import {BetterScoreSettings, EraserMode, normalizeSettings} from "./settings";
 
@@ -7,6 +8,7 @@ export default class BetterScorePlugin extends Plugin {
 
   async onload(): Promise<void> {
     this.pluginSettings = normalizeSettings(await this.loadData());
+    const annotationStore = new AnnotationStore(this.app.vault);
     this.registerView(
       VIEW_TYPE_BETTERSCORE,
       (leaf) => new BetterScoreView(
@@ -40,6 +42,21 @@ export default class BetterScorePlugin extends Plugin {
         });
       })
     );
+
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (!isPdf(file)) return;
+        void annotationStore.handlePdfRename(file, oldPath).then((result) => {
+          if (result === "conflict") {
+            new Notice(
+              `BetterScore did not move the annotations because ${file.basename}.betterscore.json already exists.`
+            );
+          }
+        }).catch((error: unknown) => {
+          new Notice(`BetterScore could not move the annotation sidecar: ${messageOf(error)}`);
+        });
+      })
+    );
   }
 
   private async setHighlighterWidth(width: number): Promise<void> {
@@ -68,4 +85,8 @@ export default class BetterScorePlugin extends Plugin {
 
 function isPdf(file: unknown): file is TFile {
   return file instanceof TFile && file.extension.toLowerCase() === "pdf";
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

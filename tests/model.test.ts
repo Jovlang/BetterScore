@@ -3,9 +3,16 @@ import test from "node:test";
 import {
   createAnnotationDocument,
   parseAnnotationDocument,
+  rewriteAnnotationSourcePath,
   serializeAnnotationDocument,
+  SourceFingerprintMismatchError,
+  SourceIdentity,
   sidecarPath
 } from "../src/model";
+
+function source(path: string, fingerprint = "sha256-partial:test"): SourceIdentity {
+  return {path, fingerprint, size: 1234};
+}
 
 test("sidecarPath keeps annotations beside the score", () => {
   assert.equal(sidecarPath("Scores/Requiem.pdf"), "Scores/Requiem.betterscore.json");
@@ -13,7 +20,7 @@ test("sidecarPath keeps annotations beside the score", () => {
 });
 
 test("sidecars serialize compact tuple points and round-trip", () => {
-  const document = createAnnotationDocument("Score.pdf");
+  const document = createAnnotationDocument(source("Score.pdf"));
   document.pages["1"] = {
     strokes: [
       {
@@ -35,12 +42,12 @@ test("sidecars serialize compact tuple points and round-trip", () => {
   assert.equal(serialized.includes("\n"), false);
   assert.equal(serialized.includes('"x"'), false);
   assert.ok(serialized.length < 500);
-  const parsed = parseAnnotationDocument(serialized, "Score.pdf");
+  const parsed = parseAnnotationDocument(serialized, source("Score.pdf"));
   assert.ok((parsed.pages["1"]?.strokes[0]?.points.length ?? 0) <= 3);
 });
 
 test("annotation documents round-trip", () => {
-  const document = createAnnotationDocument("Scores/Requiem.pdf");
+  const document = createAnnotationDocument(source("Scores/Requiem.pdf"));
   document.pages["1"] = {
     strokes: [
       {
@@ -64,13 +71,13 @@ test("annotation documents round-trip", () => {
     ]
   };
   assert.deepEqual(
-    parseAnnotationDocument(JSON.stringify(document), "Scores/Requiem.pdf"),
+    parseAnnotationDocument(JSON.stringify(document), source("Scores/Requiem.pdf")),
     document
   );
 });
 
 test("strokes without opacity receive a tool-appropriate default", () => {
-  const document = createAnnotationDocument("Score.pdf");
+  const document = createAnnotationDocument(source("Score.pdf"));
   const legacy = {
     ...document,
     pages: {
@@ -87,9 +94,9 @@ test("strokes without opacity receive a tool-appropriate default", () => {
       }
     }
   };
-  const parsed = parseAnnotationDocument(JSON.stringify(legacy), "Score.pdf");
+  const parsed = parseAnnotationDocument(JSON.stringify(legacy), source("Score.pdf"));
   assert.equal(parsed.pages["1"]?.strokes[0]?.opacity, 0.2);
-  assert.equal(parsed.version, 4);
+  assert.equal(parsed.version, 5);
 });
 
 test("version 1 highlighters migrate away from the dark segmented opacity", () => {
@@ -115,15 +122,50 @@ test("version 1 highlighters migrate away from the dark segmented opacity", () =
       }
     }
   };
-  const parsed = parseAnnotationDocument(JSON.stringify(legacy), "Score.pdf");
+  const parsed = parseAnnotationDocument(JSON.stringify(legacy), source("Score.pdf"));
   assert.equal(parsed.pages["1"]?.strokes[0]?.opacity, 0.2);
-  assert.equal(parsed.version, 4);
+  assert.equal(parsed.version, 5);
 });
 
-test("a sidecar cannot silently attach to a different PDF", () => {
-  const document = createAnnotationDocument("First.pdf");
+test("a sidecar cannot silently attach to different PDF content", () => {
+  const document = createAnnotationDocument(source("Score.pdf", "sha256-partial:first"));
   assert.throws(
-    () => parseAnnotationDocument(JSON.stringify(document), "Second.pdf"),
+    () => parseAnnotationDocument(
+      JSON.stringify(document),
+      source("Score.pdf", "sha256-partial:second")
+    ),
+    SourceFingerprintMismatchError
+  );
+});
+
+test("a matching fingerprint self-heals a stale source path", () => {
+  const document = createAnnotationDocument(source("Old/Score.pdf"));
+  const expected = source("New/Score.pdf");
+  const parsed = parseAnnotationDocument(JSON.stringify(document), expected);
+  assert.deepEqual(parsed.source, expected);
+});
+
+test("legacy sidecars still require their original path", () => {
+  const legacy = {
+    version: 4,
+    source: "Old/Score.pdf",
+    updatedAt: new Date(0).toISOString(),
+    pages: {}
+  };
+  assert.throws(
+    () => parseAnnotationDocument(JSON.stringify(legacy), source("New/Score.pdf")),
     /does not match/
   );
+});
+
+test("source paths can be rewritten without changing annotations", () => {
+  const document = createAnnotationDocument(source("Old/Score.pdf"));
+  document.pages["1"] = {strokes: [], texts: []};
+  const rewritten = rewriteAnnotationSourcePath(
+    serializeAnnotationDocument(document),
+    "New/Score.pdf"
+  );
+  const parsed = parseAnnotationDocument(rewritten, source("New/Score.pdf"));
+  assert.equal(parsed.source.path, "New/Score.pdf");
+  assert.deepEqual(parsed.pages["1"], {strokes: [], texts: []});
 });

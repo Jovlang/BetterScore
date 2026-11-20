@@ -1,6 +1,6 @@
 import {simplifyStrokePoints} from "./simplify";
 
-export const SIDECAR_VERSION = 4 as const;
+export const SIDECAR_VERSION = 5 as const;
 
 export type AnnotationTool = "pen" | "highlighter";
 
@@ -39,9 +39,15 @@ export interface PageAnnotations {
   texts: TextAnnotation[];
 }
 
+export interface SourceIdentity {
+  path: string;
+  fingerprint: string;
+  size: number;
+}
+
 export interface AnnotationDocument {
   version: typeof SIDECAR_VERSION;
-  source: string;
+  source: SourceIdentity;
   updatedAt: string;
   pages: Record<string, PageAnnotations>;
 }
@@ -50,7 +56,17 @@ export function sidecarPath(pdfPath: string): string {
   return pdfPath.replace(/\.pdf$/i, "") + ".betterscore.json";
 }
 
-export function createAnnotationDocument(source: string): AnnotationDocument {
+export class SourceFingerprintMismatchError extends Error {
+  constructor(
+    readonly expected: SourceIdentity,
+    readonly actual: SourceIdentity
+  ) {
+    super(`PDF fingerprint does not match the annotation sidecar for ${expected.path}`);
+    this.name = "SourceFingerprintMismatchError";
+  }
+}
+
+export function createAnnotationDocument(source: SourceIdentity): AnnotationDocument {
   return {
     version: SIDECAR_VERSION,
     source,
@@ -61,7 +77,7 @@ export function createAnnotationDocument(source: string): AnnotationDocument {
 
 export function parseAnnotationDocument(
   json: string,
-  expectedSource: string
+  expectedSource: SourceIdentity
 ): AnnotationDocument {
   const value: unknown = JSON.parse(json);
   if (
@@ -69,15 +85,17 @@ export function parseAnnotationDocument(
     (value.version !== 1 &&
       value.version !== 2 &&
       value.version !== 3 &&
+      value.version !== 4 &&
       value.version !== SIDECAR_VERSION)
   ) {
     throw new Error("Unsupported BetterScore annotation format");
   }
-  if (value.source !== expectedSource || !isRecord(value.pages)) {
+  if (!isRecord(value.pages)) {
     throw new Error("Annotation sidecar does not match this PDF");
   }
 
   const sourceVersion = value.version;
+  const source = parseAndValidateSource(value.source, sourceVersion, expectedSource);
   const pages: Record<string, PageAnnotations> = {};
   for (const [page, annotations] of Object.entries(value.pages)) {
     if (!isRecord(annotations)) continue;
@@ -95,10 +113,24 @@ export function parseAnnotationDocument(
 
   return {
     version: SIDECAR_VERSION,
-    source: expectedSource,
+    source,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date(0).toISOString(),
     pages
   };
+}
+
+/** Update only the stored path while preserving fingerprint and annotations. */
+export function rewriteAnnotationSourcePath(json: string, newPath: string): string {
+  const value: unknown = JSON.parse(json);
+  if (!isRecord(value)) throw new Error("Invalid BetterScore sidecar");
+  if (typeof value.source === "string") {
+    value.source = newPath;
+  } else if (isRecord(value.source)) {
+    value.source.path = newPath;
+  } else {
+    throw new Error("Invalid BetterScore source identity");
+  }
+  return JSON.stringify(value);
 }
 
 export function serializeAnnotationDocument(
@@ -158,6 +190,38 @@ function parseTextAnnotation(value: unknown): TextAnnotation | null {
     color: value.color,
     fontSize: Math.max(0.008, Math.min(0.1, value.fontSize))
   };
+}
+
+function parseAndValidateSource(
+  value: unknown,
+  sourceVersion: number,
+  expected: SourceIdentity
+): SourceIdentity {
+  if (sourceVersion < 5) {
+    if (value !== expected.path) {
+      throw new Error("Annotation sidecar does not match this PDF path");
+    }
+    return expected;
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.path !== "string" ||
+    typeof value.fingerprint !== "string" ||
+    typeof value.size !== "number"
+  ) {
+    throw new Error("Invalid BetterScore source identity");
+  }
+  const actual: SourceIdentity = {
+    path: value.path,
+    fingerprint: value.fingerprint,
+    size: value.size
+  };
+  if (actual.fingerprint !== expected.fingerprint || actual.size !== expected.size) {
+    throw new SourceFingerprintMismatchError(expected, actual);
+  }
+  // A matching fingerprint proves identity, so a stale path can self-heal after
+  // a move even if the rename event was missed on another device.
+  return expected;
 }
 
 function parseStroke(value: unknown, sourceVersion: number): Stroke | null {
