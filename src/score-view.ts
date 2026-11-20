@@ -14,12 +14,13 @@ import {precisionErase, strokeIntersectsEraser} from "./eraser";
 import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
 import {SaveCoordinator} from "./save-coordinator";
 import {NavigationChange, NavigationController} from "./navigation-controller";
-import {routePointerInput} from "./input-router";
+import {pageNavigationAction, routePointerInput} from "./input-router";
 import {PageSurface} from "./page-surface";
 import {PageSurfaceManager} from "./page-surface-manager";
 import type {PageSurfaceStats} from "./page-surface-manager";
 import type {PdfDocument} from "./pdf-types";
-import type {ViewerState, ViewMode} from "./viewer-layout";
+import {createViewerState} from "./viewer-layout";
+import type {SpreadOffset, ViewerState, ViewMode} from "./viewer-layout";
 import {
   AnnotationDocument,
   AnnotationTool,
@@ -42,6 +43,13 @@ export const VIEW_TYPE_BETTERSCORE = "betterscore-pdf";
 
 type ActiveTool = AnnotationTool | "eraser" | "text";
 
+interface NavigationGesture {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  startedAt: number;
+}
+
 export class BetterScoreView extends FileView {
   private readonly store = new AnnotationStore(this.app.vault);
   private pdf: PdfDocument | null = null;
@@ -54,6 +62,8 @@ export class BetterScoreView extends FileView {
   private annotationBlockReason = "";
   private surfaceManager: PageSurfaceManager | null = null;
   private navigationController: NavigationController | null = null;
+  private renderedViewMode: ViewMode | null = null;
+  private navigationGesture: NavigationGesture | null = null;
   private tool: ActiveTool = "pen";
   private undoStack: AnnotationDocument[] = [];
   private redoStack: AnnotationDocument[] = [];
@@ -66,6 +76,8 @@ export class BetterScoreView extends FileView {
   private redoButton: HTMLButtonElement | null = null;
   private markerButton: HTMLButtonElement | null = null;
   private eraserButton: HTMLButtonElement | null = null;
+  private spreadModeButton: HTMLButtonElement | null = null;
+  private readonly viewModeButtons = new Map<ViewMode, HTMLButtonElement>();
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -123,6 +135,10 @@ export class BetterScoreView extends FileView {
     this.navigationController?.setViewMode(mode);
   }
 
+  setSpreadOffset(offset: SpreadOffset): void {
+    this.navigationController?.setSpreadOffset(offset);
+  }
+
   async onLoadFile(file: TFile): Promise<void> {
     await super.onLoadFile(file);
     await this.openScore(file);
@@ -143,6 +159,8 @@ export class BetterScoreView extends FileView {
     this.undoStack = [];
     this.redoStack = [];
     this.navigationController = null;
+    this.renderedViewMode = null;
+    this.navigationGesture = null;
     this.annotationsWritable = true;
     this.annotationBlockReason = "";
     this.contentEl.empty();
@@ -168,8 +186,10 @@ export class BetterScoreView extends FileView {
       this.pdf = (await pdfjs.getDocument({data}).promise) as PdfDocument;
       this.navigationController = new NavigationController(
         this.pdf.numPages,
-        (change) => this.handleNavigationChange(change)
+        (change) => this.handleNavigationChange(change),
+        {...createViewerState(), spreadOffset: this.annotations.settings.spreadOffset}
       );
+      this.updateViewModeButtons();
       this.scoreContainer.empty();
       this.surfaceManager = new PageSurfaceManager(this.scoreContainer, this.pdf, {
         onPointerDown: (surface, event) => this.handlePointerDown(surface, event),
@@ -183,7 +203,10 @@ export class BetterScoreView extends FileView {
           new Notice(`BetterScore could not render page ${pageNumber}: ${messageOf(error)}`);
         }
       });
-      await this.surfaceManager.initializeContinuous();
+      const initialState = this.navigationController.getState();
+      if (await this.surfaceManager.setLayout(initialState)) {
+        this.renderedViewMode = initialState.viewMode;
+      }
     } catch (error) {
       this.surfaceManager?.dispose();
       this.surfaceManager = null;
@@ -197,6 +220,17 @@ export class BetterScoreView extends FileView {
 
   private renderToolbar(): void {
     this.toolbar = this.contentEl.createDiv({cls: "betterscore-toolbar"});
+    this.viewModeButtons.clear();
+    this.addViewModeButton("rows-3", "Continuous", "continuous");
+    this.addViewModeButton("rectangle-horizontal", "Single page", "single");
+    this.spreadModeButton = this.addViewModeButton("book-open", "Two-page spread", "spread");
+    this.spreadModeButton?.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      this.showSpreadOffsetMenu(event);
+    });
+    this.addActionButton("chevron-left", "Previous", "←", () => this.navigatePrevious());
+    this.addActionButton("chevron-right", "Next", "→", () => this.navigateNext());
+    this.toolbar.createDiv({cls: "betterscore-toolbar-divider"});
     this.addToolButton("pencil", "Pen", "pen");
     this.markerButton = this.addToolButton("highlighter", "Yellow marker", "highlighter");
     this.updateMarkerButton();
@@ -221,6 +255,61 @@ export class BetterScoreView extends FileView {
     );
     this.updateToolButtons();
     this.updateHistoryButtons();
+    this.updateViewModeButtons();
+  }
+
+  private addViewModeButton(
+    icon: string,
+    label: string,
+    mode: ViewMode
+  ): HTMLButtonElement | null {
+    const button = this.toolbar?.createEl("button", {
+      cls: "clickable-icon betterscore-view-mode",
+      attr: {"aria-label": label, "data-view-mode": mode, title: label}
+    });
+    if (!button) return null;
+    setIcon(button, icon);
+    button.createSpan({cls: "betterscore-button-label", text: label});
+    button.addEventListener("click", () => this.setViewMode(mode));
+    this.viewModeButtons.set(mode, button);
+    return button;
+  }
+
+  private showSpreadOffsetMenu(event: MouseEvent): void {
+    const current = this.navigationController?.getState().spreadOffset
+      ?? this.annotations.settings.spreadOffset;
+    const menu = new Menu();
+    const choices: Array<{offset: SpreadOffset; label: string}> = [
+      {offset: 0, label: "Page 1 alone on the right"},
+      {offset: 1, label: "Pair pages 1 and 2"}
+    ];
+    for (const choice of choices) {
+      menu.addItem((item) => {
+        item
+          .setTitle(choice.label)
+          .setChecked(current === choice.offset)
+          .onClick(() => this.setSpreadOffset(choice.offset));
+      });
+    }
+    menu.showAtMouseEvent(event);
+  }
+
+  private updateViewModeButtons(): void {
+    const state = this.navigationController?.getState() ?? createViewerState();
+    for (const [mode, button] of this.viewModeButtons) {
+      button.toggleClass("is-active", mode === state.viewMode);
+    }
+    if (this.spreadModeButton) {
+      const pairing = state.spreadOffset === 0 ? "page 1 alone" : "pages 1–2 paired";
+      this.spreadModeButton.setAttribute(
+        "aria-label",
+        `Two-page spread · ${pairing}. Right-click to change pairing.`
+      );
+      this.spreadModeButton.setAttribute(
+        "title",
+        `Spread pairing: ${pairing} · Right-click to change`
+      );
+    }
   }
 
   private addToolButton(
@@ -334,8 +423,20 @@ export class BetterScoreView extends FileView {
   private handlePointerDown(surface: PageSurface, event: PointerEvent): void {
     const {pageNumber} = surface;
     const viewMode = this.navigationController?.getState().viewMode ?? "continuous";
-    // Phase 6 will hand page-navigation gestures to its swipe/click adapter.
-    if (routePointerInput(event.pointerType, viewMode) !== "annotation") return;
+    const intent = routePointerInput(event.pointerType, viewMode);
+    if (intent === "scroll") return;
+    if (intent === "page-navigation") {
+      if (this.navigationGesture) return;
+      event.preventDefault();
+      surface.capturePointer(event.pointerId);
+      this.navigationGesture = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startedAt: performance.now()
+      };
+      return;
+    }
     if (event.button !== 0 && event.pointerType === "mouse") return;
     if (!this.annotationsWritable) {
       new Notice(`BetterScore: ${this.annotationBlockReason}`);
@@ -372,6 +473,10 @@ export class BetterScoreView extends FileView {
   }
 
   private handlePointerMove(surface: PageSurface, event: PointerEvent): void {
+    if (this.navigationGesture?.pointerId === event.pointerId) {
+      event.preventDefault();
+      return;
+    }
     if (!surface.hasPointerCapture(event.pointerId)) return;
     const point = surface.pointFromEvent(event);
     if (this.tool === "eraser") {
@@ -386,6 +491,13 @@ export class BetterScoreView extends FileView {
   }
 
   private handlePointerEnd(surface: PageSurface, event: PointerEvent): void {
+    if (this.navigationGesture?.pointerId === event.pointerId) {
+      const gesture = this.navigationGesture;
+      this.navigationGesture = null;
+      surface.releasePointer(event.pointerId);
+      if (event.type === "pointerup") this.finishNavigationGesture(surface, gesture, event);
+      return;
+    }
     surface.releasePointer(event.pointerId);
     if (this.activeStroke) {
       if (event.type === "pointerup") {
@@ -404,6 +516,27 @@ export class BetterScoreView extends FileView {
     }
     this.activeStroke = null;
     this.activePage = null;
+  }
+
+  private finishNavigationGesture(
+    surface: PageSurface,
+    gesture: NavigationGesture,
+    event: PointerEvent
+  ): void {
+    const endX = event.clientX;
+    const endY = event.clientY;
+    const bounds = surface.overlay.getBoundingClientRect();
+    const action = pageNavigationAction({
+      startX: gesture.startX,
+      startY: gesture.startY,
+      endX,
+      endY,
+      surfaceLeft: bounds.left,
+      surfaceWidth: bounds.width,
+      durationMs: performance.now() - gesture.startedAt
+    });
+    if (action === "next") this.navigationController?.next();
+    else if (action === "previous") this.navigationController?.previous();
   }
 
   private eraseAt(pageNumber: number, point: StrokePoint): void {
@@ -481,6 +614,7 @@ export class BetterScoreView extends FileView {
     const previous = this.undoStack.pop();
     if (!previous) return;
     this.redoStack.push(structuredClone(this.annotations));
+    previous.settings = this.annotations.settings;
     this.annotations = previous;
     this.redrawAll();
     this.scheduleSave();
@@ -491,6 +625,7 @@ export class BetterScoreView extends FileView {
     const next = this.redoStack.pop();
     if (!next) return;
     this.undoStack.push(structuredClone(this.annotations));
+    next.settings = this.annotations.settings;
     this.annotations = next;
     this.redrawAll();
     this.scheduleSave();
@@ -546,9 +681,31 @@ export class BetterScoreView extends FileView {
   }
 
   private handleNavigationChange(change: NavigationChange): void {
+    this.updateViewModeButtons();
+    if (this.annotations.settings.spreadOffset !== change.state.spreadOffset) {
+      this.annotations.settings.spreadOffset = change.state.spreadOffset;
+      this.scheduleSave();
+    }
     if (change.cause === "viewport") return;
-    if (change.state.viewMode === "continuous") {
+    if (change.state.viewMode === "continuous" && this.renderedViewMode === "continuous") {
       this.surfaceManager?.scrollToPage(change.state.currentPage, "auto");
+      return;
+    }
+    void this.applyViewerLayout(change.state);
+  }
+
+  private async applyViewerLayout(state: ViewerState): Promise<void> {
+    const manager = this.surfaceManager;
+    if (!manager) return;
+    const applied = await manager.setLayout(state);
+    if (!applied || manager !== this.surfaceManager) return;
+    const current = this.navigationController?.getState();
+    if (
+      current?.viewMode === state.viewMode
+      && current.currentPage === state.currentPage
+      && current.spreadOffset === state.spreadOffset
+    ) {
+      this.renderedViewMode = state.viewMode;
     }
   }
 
@@ -586,6 +743,8 @@ export class BetterScoreView extends FileView {
   private async destroyPdf(): Promise<void> {
     this.surfaceManager?.dispose();
     this.surfaceManager = null;
+    this.renderedViewMode = null;
+    this.navigationGesture = null;
     if (!this.pdf) return;
     await this.pdf.destroy();
     this.pdf = null;

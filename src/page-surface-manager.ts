@@ -1,5 +1,7 @@
 import {PageSurface, PageSurfacePointerHandlers} from "./page-surface";
 import type {PdfDocument, PdfViewport} from "./pdf-types";
+import {clampPage, createViewerState, pagesForLayout} from "./viewer-layout";
+import type {ViewerState, ViewMode} from "./viewer-layout";
 
 const OBSERVER_ROOT_MARGIN = "200% 0px";
 const MAX_CONCURRENT_RENDERS = 2;
@@ -27,6 +29,11 @@ export interface PageSurfaceManagerCallbacks extends PageSurfacePointerHandlers 
   onRenderError?: (pageNumber: number, error: unknown) => void;
 }
 
+interface QueuedRender {
+  pageNumber: number;
+  generation: number;
+}
+
 export class PageSurfaceManager {
   private readonly surfaces = new Map<number, PageSurface>();
   private readonly mounting = new Map<number, Promise<PageSurface>>();
@@ -34,49 +41,57 @@ export class PageSurfaceManager {
   private readonly slots = new Map<number, HTMLElement>();
   private readonly desiredPages = new Set<number>();
   private readonly queuedPages = new Set<number>();
-  private readonly renderQueue: number[] = [];
+  private readonly renderQueue: QueuedRender[] = [];
   private observer: IntersectionObserver | null = null;
   private activeRenders = 0;
   private cancelledRenders = 0;
   private currentPage = 1;
+  private layoutState: ViewerState = createViewerState();
+  private layoutGeneration = 0;
   private scrollFrame: number | null = null;
+  private resizeFrame: number | null = null;
   private disposed = false;
 
   constructor(
     private readonly container: HTMLElement,
     private readonly pdf: PdfDocument,
     private readonly callbacks: PageSurfaceManagerCallbacks
-  ) {}
+  ) {
+    window.addEventListener("resize", this.handleResize, {passive: true});
+  }
 
   async initializeContinuous(): Promise<void> {
-    this.container.empty();
-    this.installViewportObservers();
-    const availableWidth = this.availableWidth();
-    const pixelRatio = this.pixelRatio();
+    await this.setLayout(createViewerState());
+  }
 
-    for (let pageNumber = 1; pageNumber <= this.pdf.numPages; pageNumber += 1) {
-      if (this.disposed) return;
+  /** Rebuild only the layout; PDF geometry and the annotation model stay shared. */
+  async setLayout(state: ViewerState): Promise<boolean> {
+    if (this.disposed) return false;
+    const generation = ++this.layoutGeneration;
+    this.layoutState = {...state, currentPage: clampPage(state.currentPage, this.pdf.numPages)};
+    this.currentPage = this.layoutState.currentPage;
+    this.resetLayout();
+    this.container.dataset.viewMode = state.viewMode;
+
+    const pages = pagesForLayout(this.layoutState, this.pdf.numPages);
+    for (const pageNumber of pages) {
       const baseViewport = await this.loadPageGeometry(pageNumber);
-      const scales = calculateRenderScales(baseViewport, availableWidth, pixelRatio);
-      const slot = this.container.createDiv({cls: "betterscore-page betterscore-page-placeholder"});
-      slot.dataset.page = String(pageNumber);
-      slot.style.width = `${baseViewport.width * scales.cssScale}px`;
-      slot.style.height = `${baseViewport.height * scales.cssScale}px`;
-      this.slots.set(pageNumber, slot);
-      this.observer?.observe(slot);
+      if (!this.isCurrentGeneration(generation)) return false;
+      this.createSlot(pageNumber, baseViewport, state.viewMode, pages);
+    }
 
-      if (pageNumber === 1) {
-        this.callbacks.onCurrentPageChange?.(1);
+    if (!this.isCurrentGeneration(generation)) return false;
+    if (state.viewMode === "continuous") {
+      this.positionSlot(this.currentPage, "auto");
+      this.installViewportObservers();
+      this.requestRender(this.currentPage);
+      if (!this.observer) {
+        for (const pageNumber of pages) this.requestRender(pageNumber);
       }
+    } else {
+      for (const pageNumber of pages) this.requestRender(pageNumber);
     }
-    // Obsidian's supported webviews provide IntersectionObserver. Retain a
-    // functional eager fallback for unusual or future runtimes that do not.
-    if (!this.observer) {
-      for (let pageNumber = 1; pageNumber <= this.pdf.numPages; pageNumber += 1) {
-        this.requestRender(pageNumber);
-      }
-    }
-    this.scheduleCurrentPageUpdate();
+    return true;
   }
 
   mountPage(pageNumber: number): Promise<PageSurface> {
@@ -84,7 +99,8 @@ export class PageSurfaceManager {
     if (existing) return Promise.resolve(existing);
     const pending = this.mounting.get(pageNumber);
     if (pending) return pending;
-    const mounting = this.createSurface(pageNumber);
+    const generation = this.layoutGeneration;
+    const mounting = this.createSurface(pageNumber, generation);
     this.mounting.set(pageNumber, mounting);
     void mounting.finally(() => {
       if (this.mounting.get(pageNumber) === mounting) this.mounting.delete(pageNumber);
@@ -137,14 +153,10 @@ export class PageSurfaceManager {
     this.requestRender(pageNumber);
     if (pageNumber !== this.currentPage) {
       this.currentPage = pageNumber;
+      this.layoutState = {...this.layoutState, currentPage: pageNumber};
       this.callbacks.onCurrentPageChange?.(pageNumber);
     }
-    const containerBounds = this.container.getBoundingClientRect();
-    const slotBounds = slot.getBoundingClientRect();
-    this.container.scrollTo({
-      top: this.container.scrollTop + slotBounds.top - containerBounds.top,
-      behavior
-    });
+    this.positionSlot(pageNumber, behavior);
     return true;
   }
 
@@ -168,6 +180,15 @@ export class PageSurfaceManager {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.layoutGeneration += 1;
+    window.removeEventListener("resize", this.handleResize);
+    if (this.resizeFrame !== null) window.cancelAnimationFrame(this.resizeFrame);
+    this.resizeFrame = null;
+    this.resetLayout();
+    this.pageGeometry.clear();
+  }
+
+  private resetLayout(): void {
     this.observer?.disconnect();
     this.observer = null;
     this.container.removeEventListener("scroll", this.handleScroll);
@@ -181,25 +202,29 @@ export class PageSurfaceManager {
     }
     this.surfaces.clear();
     this.mounting.clear();
-    this.pageGeometry.clear();
     this.slots.clear();
+    this.container.empty();
   }
 
-  private async createSurface(pageNumber: number): Promise<PageSurface> {
+  private async createSurface(pageNumber: number, generation: number): Promise<PageSurface> {
     if (this.disposed) throw new Error("PageSurfaceManager is disposed");
     if (pageNumber < 1 || pageNumber > this.pdf.numPages) {
       throw new RangeError(`PDF page ${pageNumber} is out of range`);
     }
 
     const page = await this.pdf.getPage(pageNumber);
-    if (this.disposed) {
+    if (!this.isCurrentGeneration(generation)) {
       page.cleanup?.();
-      throw new Error("PageSurfaceManager was disposed while mounting a page");
+      throw new StaleLayoutError();
     }
     const baseViewport = this.pageGeometry.get(pageNumber) ?? page.getViewport({scale: 1});
     this.pageGeometry.set(pageNumber, baseViewport);
-    const scales = calculateRenderScales(baseViewport, this.availableWidth(), this.pixelRatio());
-    const slot = this.slots.get(pageNumber) ?? this.createFallbackSlot(pageNumber, baseViewport, scales);
+    const scales = this.scalesForPage(baseViewport, this.layoutState.viewMode);
+    const slot = this.slots.get(pageNumber);
+    if (!slot) {
+      page.cleanup?.();
+      throw new StaleLayoutError();
+    }
     const surface = new PageSurface(
       slot,
       pageNumber,
@@ -211,6 +236,10 @@ export class PageSurfaceManager {
       },
       this.callbacks
     );
+    if (!this.isCurrentGeneration(generation)) {
+      surface.destroy();
+      throw new StaleLayoutError();
+    }
     this.surfaces.set(pageNumber, surface);
     this.callbacks.drawAnnotations(surface);
     return surface;
@@ -221,22 +250,50 @@ export class PageSurfaceManager {
     if (cached) return cached;
     const page = await this.pdf.getPage(pageNumber);
     const viewport = page.getViewport({scale: 1});
-    this.pageGeometry.set(pageNumber, viewport);
+    if (!this.disposed) this.pageGeometry.set(pageNumber, viewport);
     page.cleanup?.();
     return viewport;
   }
 
-  private createFallbackSlot(
+  private createSlot(
     pageNumber: number,
     baseViewport: PdfViewport,
-    scales: RenderScales
-  ): HTMLElement {
+    mode: ViewMode,
+    layoutPages: number[]
+  ): void {
+    const scales = this.scalesForPage(baseViewport, mode);
     const slot = this.container.createDiv({cls: "betterscore-page betterscore-page-placeholder"});
     slot.dataset.page = String(pageNumber);
     slot.style.width = `${baseViewport.width * scales.cssScale}px`;
     slot.style.height = `${baseViewport.height * scales.cssScale}px`;
+    if (mode === "spread") {
+      const rightOnly = layoutPages.length === 1
+        && this.layoutState.spreadOffset === 0
+        && pageNumber === 1;
+      slot.addClass(rightOnly || layoutPages[1] === pageNumber
+        ? "betterscore-spread-right"
+        : "betterscore-spread-left");
+    }
     this.slots.set(pageNumber, slot);
-    return slot;
+  }
+
+  private scalesForPage(baseViewport: PdfViewport, mode: ViewMode): RenderScales {
+    const pixelRatio = this.pixelRatio();
+    if (mode === "continuous") {
+      return calculateRenderScales(baseViewport, this.availableContinuousWidth(), pixelRatio);
+    }
+    const columns = mode === "spread" ? 2 : 1;
+    const padding = this.container.clientWidth <= 600 ? 16 : 32;
+    const gap = this.container.clientWidth <= 600 ? 8 : 16;
+    const totalWidth = Math.max(160, this.container.clientWidth - padding);
+    const availableWidth = columns === 2 ? Math.max(80, (totalWidth - gap) / 2) : totalWidth;
+    const availableHeight = Math.max(160, this.container.clientHeight - padding);
+    return calculatePagedRenderScales(
+      baseViewport,
+      availableWidth,
+      availableHeight,
+      pixelRatio
+    );
   }
 
   private installViewportObservers(): void {
@@ -258,44 +315,61 @@ export class PageSurfaceManager {
       },
       {root: this.container, rootMargin: OBSERVER_ROOT_MARGIN, threshold: 0}
     );
+    for (const slot of this.slots.values()) this.observer.observe(slot);
   }
 
   private requestRender(pageNumber: number): void {
-    if (this.disposed || pageNumber < 1 || pageNumber > this.pdf.numPages) return;
+    if (this.disposed || !this.slots.has(pageNumber)) return;
+    if (pageNumber < 1 || pageNumber > this.pdf.numPages) return;
     this.desiredPages.add(pageNumber);
     const surface = this.surfaces.get(pageNumber);
     if (surface?.isPdfRendered() || this.queuedPages.has(pageNumber)) return;
     this.queuedPages.add(pageNumber);
-    this.renderQueue.push(pageNumber);
+    this.renderQueue.push({pageNumber, generation: this.layoutGeneration});
     this.drainRenderQueue();
   }
 
   private drainRenderQueue(): void {
     while (!this.disposed && this.activeRenders < MAX_CONCURRENT_RENDERS) {
-      const pageNumber = this.renderQueue.shift();
-      if (pageNumber === undefined) return;
-      this.queuedPages.delete(pageNumber);
-      if (!this.desiredPages.has(pageNumber)) continue;
+      const queued = this.renderQueue.shift();
+      if (!queued) return;
+      this.queuedPages.delete(queued.pageNumber);
+      if (!this.desiredPages.has(queued.pageNumber)) continue;
+      if (!this.isCurrentGeneration(queued.generation)) continue;
       this.activeRenders += 1;
-      void this.renderRequestedPage(pageNumber).finally(() => {
+      void this.renderRequestedPage(queued).finally(() => {
         this.activeRenders -= 1;
         this.drainRenderQueue();
       });
     }
   }
 
-  private async renderRequestedPage(pageNumber: number): Promise<void> {
+  private async renderRequestedPage(queued: QueuedRender): Promise<void> {
     try {
-      const surface = await this.mountPage(pageNumber);
-      if (!this.desiredPages.has(pageNumber)) {
-        this.evictPage(pageNumber);
+      const surface = await this.mountPage(queued.pageNumber);
+      if (!this.isCurrentGeneration(queued.generation)) return;
+      if (!this.desiredPages.has(queued.pageNumber)) {
+        this.evictPage(queued.pageNumber);
         return;
       }
       await surface.renderPdf();
-      if (!this.desiredPages.has(pageNumber)) this.evictPage(pageNumber);
+      if (!this.desiredPages.has(queued.pageNumber)) this.evictPage(queued.pageNumber);
     } catch (error) {
-      if (!this.disposed) this.callbacks.onRenderError?.(pageNumber, error);
+      if (!this.disposed && !(error instanceof StaleLayoutError)) {
+        this.callbacks.onRenderError?.(queued.pageNumber, error);
+      }
     }
+  }
+
+  private positionSlot(pageNumber: number, behavior: ScrollBehavior): void {
+    const slot = this.slots.get(pageNumber);
+    if (!slot) return;
+    const containerBounds = this.container.getBoundingClientRect();
+    const slotBounds = slot.getBoundingClientRect();
+    this.container.scrollTo({
+      top: this.container.scrollTop + slotBounds.top - containerBounds.top,
+      behavior
+    });
   }
 
   private scheduleCurrentPageUpdate(): void {
@@ -307,7 +381,7 @@ export class PageSurfaceManager {
   }
 
   private updateCurrentPage(): void {
-    if (this.slots.size === 0) return;
+    if (this.layoutState.viewMode !== "continuous" || this.slots.size === 0) return;
     const containerBounds = this.container.getBoundingClientRect();
     const viewportCenter = containerBounds.top + containerBounds.height / 2;
     let nearestPage = this.currentPage;
@@ -322,10 +396,11 @@ export class PageSurfaceManager {
     }
     if (nearestPage === this.currentPage) return;
     this.currentPage = nearestPage;
+    this.layoutState = {...this.layoutState, currentPage: nearestPage};
     this.callbacks.onCurrentPageChange?.(nearestPage);
   }
 
-  private availableWidth(): number {
+  private availableContinuousWidth(): number {
     return Math.max(320, this.container.clientWidth - 32);
   }
 
@@ -333,9 +408,28 @@ export class PageSurfaceManager {
     return Math.min(window.devicePixelRatio || 1, 2);
   }
 
+  private isCurrentGeneration(generation: number): boolean {
+    return !this.disposed && generation === this.layoutGeneration;
+  }
+
   private readonly handleScroll = (): void => {
     this.scheduleCurrentPageUpdate();
   };
+
+  private readonly handleResize = (): void => {
+    if (this.resizeFrame !== null || this.disposed) return;
+    this.resizeFrame = window.requestAnimationFrame(() => {
+      this.resizeFrame = null;
+      void this.setLayout(this.layoutState);
+    });
+  };
+}
+
+class StaleLayoutError extends Error {
+  constructor() {
+    super("BetterScore layout changed during page rendering");
+    this.name = "StaleLayoutError";
+  }
 }
 
 export function calculateRenderScales(
@@ -344,6 +438,24 @@ export function calculateRenderScales(
   pixelRatio: number
 ): RenderScales {
   const cssScale = Math.min(availableWidth / baseViewport.width, 1.75);
+  return {
+    cssScale,
+    renderScale: cssScale * pixelRatio,
+    pixelRatio
+  };
+}
+
+export function calculatePagedRenderScales(
+  baseViewport: PdfViewport,
+  availableWidth: number,
+  availableHeight: number,
+  pixelRatio: number
+): RenderScales {
+  const cssScale = Math.min(
+    availableWidth / baseViewport.width,
+    availableHeight / baseViewport.height,
+    1.75
+  );
   return {
     cssScale,
     renderScale: cssScale * pixelRatio,

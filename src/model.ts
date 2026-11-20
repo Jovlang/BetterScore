@@ -1,6 +1,6 @@
 import {simplifyStrokePoints} from "./simplify";
 
-export const SIDECAR_VERSION = 5 as const;
+export const SIDECAR_VERSION = 6 as const;
 
 export type AnnotationTool = "pen" | "highlighter";
 
@@ -48,6 +48,10 @@ export interface SourceIdentity {
 export interface AnnotationDocument {
   version: typeof SIDECAR_VERSION;
   source: SourceIdentity;
+  settings: {
+    /** Document property: whether page 1 is paired with page 2. */
+    spreadOffset: 0 | 1;
+  };
   updatedAt: string;
   pages: Record<string, PageAnnotations>;
 }
@@ -70,6 +74,7 @@ export function createAnnotationDocument(source: SourceIdentity): AnnotationDocu
   return {
     version: SIDECAR_VERSION,
     source,
+    settings: {spreadOffset: 0},
     updatedAt: new Date(0).toISOString(),
     pages: {}
   };
@@ -86,6 +91,7 @@ export function parseAnnotationDocument(
       value.version !== 2 &&
       value.version !== 3 &&
       value.version !== 4 &&
+      value.version !== 5 &&
       value.version !== SIDECAR_VERSION)
   ) {
     throw new Error("Unsupported BetterScore annotation format");
@@ -96,6 +102,7 @@ export function parseAnnotationDocument(
 
   const sourceVersion = value.version;
   const source = parseAndValidateSource(value.source, sourceVersion, expectedSource);
+  const settings = parseDocumentSettings(value.settings);
   const pages: Record<string, PageAnnotations> = {};
   for (const [page, annotations] of Object.entries(value.pages)) {
     if (!isRecord(annotations)) continue;
@@ -114,6 +121,7 @@ export function parseAnnotationDocument(
   return {
     version: SIDECAR_VERSION,
     source,
+    settings,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date(0).toISOString(),
     pages
   };
@@ -165,9 +173,16 @@ export function serializeAnnotationDocument(
   return JSON.stringify({
     version: SIDECAR_VERSION,
     source: document.source,
+    settings: document.settings,
     updatedAt,
     pages
   });
+}
+
+function parseDocumentSettings(value: unknown): AnnotationDocument["settings"] {
+  return {
+    spreadOffset: isRecord(value) && value.spreadOffset === 1 ? 1 : 0
+  };
 }
 
 function parseTextAnnotation(value: unknown): TextAnnotation | null {

@@ -85,3 +85,13 @@ test("currentPage remains the active PDF page when its spread starts earlier", (
   navigation.setViewMode("single");
   assert.equal(navigation.getState().currentPage, 5);
 });
+
+test("spread correction changes pairing without changing the active page", () => {
+  const navigation = new NavigationController(10, () => undefined);
+  navigation.goToPage(5);
+  navigation.setViewMode("spread");
+  assert.deepEqual(pagesForLayout(navigation.getState(), 10), [4, 5]);
+  navigation.setSpreadOffset(1);
+  assert.equal(navigation.getState().currentPage, 5);
+  assert.deepEqual(pagesForLayout(navigation.getState(), 10), [5, 6]);
+});

@@ -3,6 +3,7 @@ import {AnnotationStore} from "./annotation-store";
 import {BetterScoreView, VIEW_TYPE_BETTERSCORE} from "./score-view";
 import {ScoreSwitcherModal} from "./score-switcher";
 import {BetterScoreSettings, EraserMode, normalizeSettings} from "./settings";
+import type {ViewMode} from "./viewer-layout";
 
 export default class BetterScorePlugin extends Plugin {
   private pluginSettings: BetterScoreSettings = normalizeSettings(null);
@@ -74,6 +75,35 @@ export default class BetterScorePlugin extends Plugin {
         const view = this.app.workspace.getActiveViewOfType(BetterScoreView);
         if (!view?.getViewerState()) return false;
         if (!checking) view.navigatePrevious();
+        return true;
+      }
+    });
+    const viewModes: Array<{mode: ViewMode; label: string}> = [
+      {mode: "continuous", label: "Continuous view"},
+      {mode: "single", label: "Single-page view"},
+      {mode: "spread", label: "Two-page spread view"}
+    ];
+    for (const choice of viewModes) {
+      this.addCommand({
+        id: `view-${choice.mode}`,
+        name: choice.label,
+        checkCallback: (checking) => {
+          const view = this.app.workspace.getActiveViewOfType(BetterScoreView);
+          if (!view?.getViewerState()) return false;
+          if (!checking) view.setViewMode(choice.mode);
+          return true;
+        }
+      });
+    }
+    this.addCommand({
+      id: "toggle-spread-pairing",
+      name: "Toggle spread page pairing",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BetterScoreView);
+        if (!view) return false;
+        const state = view.getViewerState();
+        if (!state) return false;
+        if (!checking) view.setSpreadOffset(state.spreadOffset === 0 ? 1 : 0);
         return true;
       }
     });

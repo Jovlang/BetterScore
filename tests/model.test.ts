@@ -96,7 +96,7 @@ test("strokes without opacity receive a tool-appropriate default", () => {
   };
   const parsed = parseAnnotationDocument(JSON.stringify(legacy), source("Score.pdf"));
   assert.equal(parsed.pages["1"]?.strokes[0]?.opacity, 0.2);
-  assert.equal(parsed.version, 5);
+  assert.equal(parsed.version, 6);
 });
 
 test("version 1 highlighters migrate away from the dark segmented opacity", () => {
@@ -124,7 +124,7 @@ test("version 1 highlighters migrate away from the dark segmented opacity", () =
   };
   const parsed = parseAnnotationDocument(JSON.stringify(legacy), source("Score.pdf"));
   assert.equal(parsed.pages["1"]?.strokes[0]?.opacity, 0.2);
-  assert.equal(parsed.version, 5);
+  assert.equal(parsed.version, 6);
 });
 
 test("a sidecar cannot silently attach to different PDF content", () => {
@@ -168,4 +168,26 @@ test("source paths can be rewritten without changing annotations", () => {
   const parsed = parseAnnotationDocument(rewritten, source("New/Score.pdf"));
   assert.equal(parsed.source.path, "New/Score.pdf");
   assert.deepEqual(parsed.pages["1"], {strokes: [], texts: []});
+});
+
+test("version 5 sidecars migrate to document spread settings", () => {
+  const legacy = {
+    version: 5,
+    source: source("Score.pdf"),
+    updatedAt: new Date(0).toISOString(),
+    pages: {}
+  };
+  const parsed = parseAnnotationDocument(JSON.stringify(legacy), source("Score.pdf"));
+  assert.equal(parsed.version, 6);
+  assert.deepEqual(parsed.settings, {spreadOffset: 0});
+});
+
+test("spread offset round-trips as a document property", () => {
+  const document = createAnnotationDocument(source("Score.pdf"));
+  document.settings.spreadOffset = 1;
+  const parsed = parseAnnotationDocument(
+    serializeAnnotationDocument(document),
+    source("Score.pdf")
+  );
+  assert.equal(parsed.settings.spreadOffset, 1);
 });

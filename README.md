@@ -6,7 +6,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 
 ## Current features
 
-- Continuous vertical PDF reading
+- Continuous, single-page, and two-page spread PDF reading
 - Viewport-based lazy page rendering with bounded canvas memory
 - Mouse, stylus, and Apple Pencil annotation input
 - Pressure-sensitive pen
@@ -24,6 +24,8 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Pure, DOM-independent spread pairing and transition functions
 - Central Pencil, finger, and mouse input routing policy
 - Page navigation from arrow keys, Page Up/Down, Home/End, and command-palette actions
+- Finger swipe and edge-tap page turns in single and spread modes
+- Persistent per-score spread pairing correction from the Spread button's right-click menu or command palette
 - Desktop and mobile support
 
 BetterScore is currently an early prototype.
@@ -48,7 +50,7 @@ npm run verify
 
 ## Rendering architecture
 
-`PageSurface` owns the PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one mounted page. `PageSurfaceManager` creates lightweight placeholders for every page, observes a generous viewport margin, limits concurrent renders, evicts distant canvases, tracks the viewport-centered current page, and exposes render-memory statistics. `NavigationController` owns the shared viewer state and all page transitions, while the score view coordinates annotations, tools, and input adapters without constructing PDF canvases directly.
+`PageSurface` owns the PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one mounted page. `PageSurfaceManager` builds continuous, single, and spread layouts from the same cached PDF geometry; continuous mode uses lightweight placeholders, viewport observation, bounded rendering, and distant-canvas eviction. Paged modes mount only the one or two visible surfaces and fit them to both viewport width and height. `NavigationController` owns the shared viewer state and all page transitions, while the score view coordinates annotations, tools, and input adapters without constructing PDF canvases directly.
 
 Run **BetterScore: Show render statistics** from the command palette while a score is active to inspect mounted surfaces, canvases, pixel area, render queues, cancellations, and the viewport-centered page.
 
@@ -56,17 +58,17 @@ Run **BetterScore: Show render statistics** from the command palette while a sco
 
 For a PDF named `Requiem.pdf`, BetterScore creates `Requiem.betterscore.json`. Coordinates and widths are normalized to the PDF page so annotations remain aligned at different display sizes.
 
-The format is versioned and migrations are handled when sidecars are loaded. Format v5 identifies the source PDF using its size and a replacement fingerprint derived from its first and last 64 KiB. This is an efficient accidental-replacement check, not a full-file content hash. A matching fingerprint allows moved files to self-heal their stored path; mismatched content is never allowed to overwrite an existing sidecar silently.
+The format is versioned and migrations are handled when sidecars are loaded. Format v5 identifies the source PDF using its size and a replacement fingerprint derived from its first and last 64 KiB. This is an efficient accidental-replacement check, not a full-file content hash. Format v6 stores the score's spread-pairing offset while keeping the current page out of the portable document. A matching fingerprint allows moved files to self-heal their stored path; mismatched content is never allowed to overwrite an existing sidecar silently.
 
 ## Roadmap
 
 - [x] Add viewport-based lazy rendering for large scores and mobile memory limits
 - [x] Establish shared continuous/single/spread state and one navigation API
-- [ ] Add a view-mode switch between continuous vertical scrolling and page-by-page flipping
-- [ ] Add a dual-page spread for landscape screens with correct left/right page pairing
+- [x] Add a view-mode switch between continuous vertical scrolling and page-by-page flipping
+- [x] Add a dual-page spread for landscape screens with correct left/right page pairing
 - [x] Preserve the current page in the shared state when switching viewing modes
-- [ ] Advance dual-page spreads by two pages while allowing single-page correction
-- [ ] Support click, swipe, keyboard, and later pedal-based page turns
+- [x] Advance dual-page spreads by two pages while allowing single-page correction
+- [x] Support toolbar, edge-tap, swipe, and keyboard page turns; pedal input remains later
 - [ ] Add zoom, thumbnails, and flattened PDF export
 
 ## License
