@@ -55,7 +55,8 @@ export default class BetterScorePlugin extends Plugin {
             + `${Math.round(stats.zoom * 100)}% zoom · `
             + `${stats.queuedRenders} queued · ${stats.activeRenders} rendering · `
             + `${stats.cancelledRenders} cancelled · ${stats.cacheStrategy} cache `
-            + `(${stats.desiredPages} pages)`,
+            + `(${stats.desiredPages} pages) · ${stats.cachedGeometries} geometries · `
+            + `${stats.estimatedSlots} estimated placeholders`,
             8000
           );
         }

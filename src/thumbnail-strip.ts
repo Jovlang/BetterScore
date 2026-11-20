@@ -1,4 +1,4 @@
-import type {PdfDocument, PdfRenderTask} from "./pdf-types";
+import type {PdfDocument, PdfPage, PdfRenderTask} from "./pdf-types";
 
 const THUMBNAIL_WIDTH = 104;
 const THUMBNAIL_HEIGHT = 148;
@@ -130,8 +130,9 @@ export class ThumbnailStrip {
   }
 
   private async render(pageNumber: number): Promise<void> {
+    let page: PdfPage | null = null;
     try {
-      const page = await this.pdf.getPage(pageNumber);
+      page = await this.pdf.getPage(pageNumber);
       if (this.disposed) return;
       const base = page.getViewport({scale: 1});
       const scale = calculateThumbnailScale(base.width, base.height);
@@ -152,6 +153,10 @@ export class ThumbnailStrip {
       this.buttons.get(pageNumber)?.addClass("is-rendered");
     } catch (error) {
       if (!this.disposed) this.onError?.(pageNumber, error);
+    } finally {
+      // PDF.js defers cleanup while another render task is active, so this is
+      // safe even when the main surface currently shares the same page proxy.
+      page?.cleanup?.();
     }
   }
 }

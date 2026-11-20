@@ -5,6 +5,7 @@ import {
   calculateRenderScales,
   capRenderScales,
   clampZoom,
+  continuousRenderWindow,
   shouldFullyCachePagedDocument
 } from "../src/page-surface-manager";
 
@@ -55,4 +56,10 @@ test("large zoom keeps CSS size but bounds both canvas backing stores", () => {
   assert.equal(scales.cssScale, 3);
   assert.ok(scales.pixelRatio < 1);
   assert.equal(scales.renderScale * 2000, 4096);
+});
+
+test("continuous render fallback stays bounded around the active page", () => {
+  assert.deepEqual(continuousRenderWindow(50, 300), [48, 49, 50, 51, 52]);
+  assert.deepEqual(continuousRenderWindow(1, 300), [1, 2, 3]);
+  assert.deepEqual(continuousRenderWindow(300, 300), [298, 299, 300]);
 });

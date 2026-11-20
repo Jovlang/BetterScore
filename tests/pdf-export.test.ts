@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {PDFDocument} from "pdf-lib";
 import {createAnnotationDocument} from "../src/model";
-import {createFlattenedPdf, flattenedPdfPath} from "../src/pdf-export";
+import {
+  createFlattenedPdf,
+  flattenedPdfPath,
+  requiresLargeExportWarning
+} from "../src/pdf-export";
 
 test("flattened exports use a non-destructive sibling path", () => {
   assert.equal(flattenedPdfPath("Scores/Requiem.pdf"), "Scores/Requiem.annotated.pdf");
@@ -23,4 +27,12 @@ test("flattened export preserves unannotated source pages", async () => {
   const parsed = await PDFDocument.load(exported);
   assert.equal(parsed.getPageCount(), 1);
   assert.deepEqual(parsed.getPage(0).getSize(), {width: 600, height: 800});
+});
+
+test("large export warnings use a stricter mobile threshold", () => {
+  const mib = 1024 * 1024;
+  assert.equal(requiresLargeExportWarning(63 * mib, true), false);
+  assert.equal(requiresLargeExportWarning(64 * mib, true), true);
+  assert.equal(requiresLargeExportWarning(191 * mib, false), false);
+  assert.equal(requiresLargeExportWarning(192 * mib, false), true);
 });

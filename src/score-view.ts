@@ -19,7 +19,7 @@ import {pageNavigationAction, routePointerInput} from "./input-router";
 import {PageSurface} from "./page-surface";
 import {PageSurfaceManager} from "./page-surface-manager";
 import type {PageSurfaceStats} from "./page-surface-manager";
-import {createFlattenedPdf, flattenedPdfPath} from "./pdf-export";
+import {PdfExportController} from "./pdf-export-controller";
 import type {PdfDocument} from "./pdf-types";
 import {ThumbnailStrip} from "./thumbnail-strip";
 import {createViewerState} from "./viewer-layout";
@@ -54,6 +54,7 @@ interface NavigationGesture {
 
 export class BetterScoreView extends FileView {
   private readonly store = new AnnotationStore(this.app.vault);
+  private readonly pdfExporter = new PdfExportController(this.app);
   private pdf: PdfDocument | null = null;
   private annotations: AnnotationDocument = createAnnotationDocument({
     path: "",
@@ -78,7 +79,6 @@ export class BetterScoreView extends FileView {
   private scoreContainer: HTMLElement | null = null;
   private thumbnailStrip: ThumbnailStrip | null = null;
   private thumbnailsOpen = false;
-  private exportingPdf = false;
   private undoButton: HTMLButtonElement | null = null;
   private redoButton: HTMLButtonElement | null = null;
   private markerButton: HTMLButtonElement | null = null;
@@ -208,7 +208,6 @@ export class BetterScoreView extends FileView {
     this.renderedViewMode = null;
     this.navigationGesture = null;
     this.thumbnailsOpen = false;
-    this.exportingPdf = false;
     this.annotationsWritable = true;
     this.annotationBlockReason = "";
     this.contentEl.empty();
@@ -377,30 +376,13 @@ export class BetterScoreView extends FileView {
   }
 
   private async exportFlattenedPdfNow(): Promise<void> {
-    if (!this.file || this.exportingPdf) return;
-    this.exportingPdf = true;
+    if (!this.file || this.pdfExporter.isExporting()) return;
     if (this.exportButton) this.exportButton.disabled = true;
     const sourceFile = this.file;
-    const notice = new Notice("BetterScore: Exporting annotated PDF…", 0);
     try {
       await this.flushSave();
-      const source = await this.app.vault.readBinary(sourceFile);
-      const bytes = await createFlattenedPdf(source, structuredClone(this.annotations));
-      let copy = 1;
-      let outputPath = flattenedPdfPath(sourceFile.path, copy);
-      while (this.app.vault.getAbstractFileByPath(outputPath)) {
-        copy += 1;
-        outputPath = flattenedPdfPath(sourceFile.path, copy);
-      }
-      const output = Uint8Array.from(bytes).buffer;
-      await this.app.vault.createBinary(outputPath, output);
-      notice.hide();
-      new Notice(`BetterScore exported ${outputPath}`, 8000);
-    } catch (error) {
-      notice.hide();
-      new Notice(`BetterScore export failed: ${messageOf(error)}`, 10000);
+      await this.pdfExporter.export(sourceFile, structuredClone(this.annotations));
     } finally {
-      this.exportingPdf = false;
       if (this.exportButton) this.exportButton.disabled = false;
     }
   }

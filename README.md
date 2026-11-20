@@ -8,6 +8,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 
 - Continuous, single-page, and two-page spread PDF reading
 - Viewport-based lazy page rendering with bounded canvas memory
+- Incremental continuous startup that loads only the active page geometry before first render
 - Mouse, stylus, and Apple Pencil annotation input
 - Pressure-sensitive pen
 - Semi-transparent yellow marker with a persistent right-click width menu
@@ -32,6 +33,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Sharp 50–300% zoom with keyboard shortcuts and bounded canvas dimensions
 - A lazy, low-resolution thumbnail strip with current-page tracking
 - Non-destructive flattened PDF export to a new sibling file
+- Explicit memory warning before large flattened exports
 - Desktop and mobile support
 
 BetterScore is currently an early prototype.
@@ -56,11 +58,11 @@ npm run verify
 
 ## Rendering architecture
 
-`PageSurface` owns the PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one mounted page. `PageSurfaceManager` builds continuous, single, and spread layouts from the same cached PDF geometry; continuous mode uses lightweight placeholders, viewport observation, bounded rendering, and distant-canvas eviction. Paged modes mount only the one or two visible surfaces and fit them to both viewport width and height. Zoom rebuilds those same surfaces sharply while bounding backing-store dimensions. `ThumbnailStrip` has its own lazy, single-task low-resolution queue. `NavigationController` owns the shared viewer state and all page transitions, while the score view coordinates annotations, tools, and input adapters without constructing PDF canvases directly.
+`PageSurface` owns the PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one mounted page. `PageSurfaceManager` builds continuous, single, and spread layouts from the same cached PDF geometry. Continuous cold-open reads only the active page geometry, creates cheap estimated placeholders for the full scroll range, and corrects each placeholder when its page approaches the viewport. Viewport observation, bounded rendering, and distant-canvas eviction keep the active window small. Paged modes mount only the one or two visible surfaces and fit them to both viewport width and height. Zoom rebuilds those same surfaces sharply while bounding backing-store dimensions. `ThumbnailStrip` has its own lazy, single-task low-resolution queue and releases PDF.js page resources after each render. `NavigationController` owns the shared viewer state and all page transitions, while the score view coordinates annotations, tools, and input adapters without constructing PDF canvases directly.
 
-Flattened export preserves the original PDF and writes `Score.annotated.pdf` (or the next available numbered name). It rasterizes only the transparent annotation layer, at up to 2× resolution, and places that layer over each original PDF page with `pdf-lib`.
+Flattened export preserves the original PDF and writes `Score.annotated.pdf` (or the next available numbered name). It rasterizes only the transparent annotation layer, at up to 2× resolution, and places that layer over each original PDF page with `pdf-lib`. Because `pdf-lib` holds the source and complete output in memory, BetterScore requires explicit confirmation for large exports (64 MiB on mobile, 192 MiB on desktop).
 
-Run **BetterScore: Show render statistics** from the command palette while a score is active to inspect mounted surfaces, canvases, pixel area, render queues, cancellations, and the viewport-centered page.
+Run **BetterScore: Show render statistics** from the command palette while a score is active to inspect mounted surfaces, canvases, pixel area, render queues, cached geometries, estimated placeholders, cancellations, and the viewport-centered page.
 
 ## Annotation format
 

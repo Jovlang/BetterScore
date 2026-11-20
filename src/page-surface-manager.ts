@@ -36,6 +36,8 @@ export interface PageSurfaceStats {
   cancelledRenders: number;
   cacheStrategy: PageCacheStrategy;
   desiredPages: number;
+  cachedGeometries: number;
+  estimatedSlots: number;
   zoom: number;
 }
 
@@ -105,19 +107,33 @@ export class PageSurfaceManager {
 
     const visiblePages = pagesForLayout(this.layoutState, this.pdf.numPages);
     const pages = this.renderWindowForState(this.layoutState);
-    for (const pageNumber of pages) {
-      const baseViewport = await this.loadPageGeometry(pageNumber);
+    if (state.viewMode === "continuous") {
+      // One real viewport is enough to establish a stable scroll height. Nearby
+      // pages replace the estimate with their exact geometry when mounted.
+      const referenceViewport = await this.loadPageGeometry(this.currentPage);
       if (!this.isCurrentLayout(generation, revision)) return false;
-      this.createSlot(pageNumber, baseViewport, state.viewMode);
+      for (const pageNumber of pages) {
+        this.createSlot(
+          pageNumber,
+          this.pageGeometry.get(pageNumber) ?? referenceViewport,
+          state.viewMode
+        );
+      }
+    } else {
+      for (const pageNumber of pages) {
+        const baseViewport = await this.loadPageGeometry(pageNumber);
+        if (!this.isCurrentLayout(generation, revision)) return false;
+        this.createSlot(pageNumber, baseViewport, state.viewMode);
+      }
     }
 
     if (!this.isCurrentLayout(generation, revision)) return false;
     if (state.viewMode === "continuous") {
       this.positionSlot(this.currentPage, "auto");
       this.installViewportObservers();
-      this.requestRender(this.currentPage);
+      this.requestRender(this.currentPage, true);
       if (!this.observer) {
-        for (const pageNumber of pages) this.requestRender(pageNumber);
+        this.renderWindow(continuousRenderWindow(this.currentPage, this.pdf.numPages));
       }
     } else {
       this.applyPagedSlotVisibility(visiblePages);
@@ -226,6 +242,10 @@ export class PageSurfaceManager {
       cancelledRenders: this.cancelledRenders,
       cacheStrategy: this.cacheStrategy,
       desiredPages: this.desiredPages.size,
+      cachedGeometries: this.pageGeometry.size,
+      estimatedSlots: [...this.slots.keys()].filter((pageNumber) => {
+        return !this.pageGeometry.has(pageNumber);
+      }).length,
       zoom: this.zoom
     };
   }
@@ -303,7 +323,7 @@ export class PageSurfaceManager {
       page.cleanup?.();
       throw new StaleLayoutError();
     }
-    const baseViewport = this.pageGeometry.get(pageNumber) ?? page.getViewport({scale: 1});
+    const baseViewport = page.getViewport({scale: 1});
     this.pageGeometry.set(pageNumber, baseViewport);
     const scales = this.scalesForPage(baseViewport, this.layoutState.viewMode);
     const slot = this.slots.get(pageNumber);
@@ -311,6 +331,7 @@ export class PageSurfaceManager {
       page.cleanup?.();
       throw new StaleLayoutError();
     }
+    this.sizeSlot(slot, baseViewport, this.layoutState.viewMode);
     const surface = new PageSurface(
       slot,
       pageNumber,
@@ -349,9 +370,27 @@ export class PageSurfaceManager {
     const scales = this.scalesForPage(baseViewport, mode);
     const slot = this.container.createDiv({cls: "betterscore-page betterscore-page-placeholder"});
     slot.dataset.page = String(pageNumber);
-    slot.style.width = `${baseViewport.width * scales.cssScale}px`;
-    slot.style.height = `${baseViewport.height * scales.cssScale}px`;
+    this.sizeSlot(slot, baseViewport, mode, scales, false);
     this.slots.set(pageNumber, slot);
+  }
+
+  private sizeSlot(
+    slot: HTMLElement,
+    baseViewport: PdfViewport,
+    mode: ViewMode,
+    scales = this.scalesForPage(baseViewport, mode),
+    preserveScroll = true
+  ): void {
+    const oldBounds = preserveScroll ? slot.getBoundingClientRect() : null;
+    const wasAboveViewport = oldBounds
+      ? oldBounds.bottom <= this.container.getBoundingClientRect().top
+      : false;
+    const nextHeight = baseViewport.height * scales.cssScale;
+    slot.style.width = `${baseViewport.width * scales.cssScale}px`;
+    slot.style.height = `${nextHeight}px`;
+    if (wasAboveViewport && oldBounds && oldBounds.height > 0) {
+      this.container.scrollTop += nextHeight - oldBounds.height;
+    }
   }
 
   private applyPagedSlotVisibility(visiblePages: number[]): void {
@@ -432,17 +471,18 @@ export class PageSurfaceManager {
   }
 
   private estimatePagedCanvasBytes(mode: ViewMode): number {
-    let total = 0;
-    for (let pageNumber = 1; pageNumber <= this.pdf.numPages; pageNumber += 1) {
-      const viewport = this.pageGeometry.get(pageNumber);
-      if (!viewport) return Number.POSITIVE_INFINITY;
+    if (this.pageGeometry.size === 0) return Number.POSITIVE_INFINITY;
+    let largestKnownPage = 0;
+    for (const viewport of this.pageGeometry.values()) {
       const scales = this.scalesForPage(viewport, mode);
       const pixelWidth = Math.ceil(viewport.width * scales.renderScale);
       const pixelHeight = Math.ceil(viewport.height * scales.renderScale);
       // Each mounted page owns a PDF canvas and an equally sized ink canvas.
-      total += pixelWidth * pixelHeight * 2 * 4;
+      largestKnownPage = Math.max(largestKnownPage, pixelWidth * pixelHeight * 2 * 4);
     }
-    return total;
+    // Use the largest known page rather than the mean so mixed-size scores do
+    // not become more aggressive as their geometry cache fills.
+    return largestKnownPage * this.pdf.numPages;
   }
 
   private installViewportObservers(): void {
@@ -559,6 +599,9 @@ export class PageSurfaceManager {
     this.currentPage = nearestPage;
     this.layoutState = {...this.layoutState, currentPage: nearestPage};
     this.callbacks.onCurrentPageChange?.(nearestPage);
+    if (!this.observer) {
+      this.renderWindow(continuousRenderWindow(nearestPage, this.pdf.numPages));
+    }
   }
 
   private availableContinuousWidth(): number {
@@ -659,6 +702,17 @@ export function capRenderScales(
     renderScale: scales.cssScale * pixelRatio,
     pixelRatio
   };
+}
+
+export function continuousRenderWindow(
+  currentPage: number,
+  pageCount: number,
+  radius = 2
+): number[] {
+  const current = clampPage(currentPage, pageCount);
+  const first = Math.max(1, current - Math.max(0, radius));
+  const last = Math.min(pageCount, current + Math.max(0, radius));
+  return Array.from({length: Math.max(0, last - first + 1)}, (_, index) => first + index);
 }
 
 function applyZoom(scales: RenderScales, zoom: number): RenderScales {

@@ -4,6 +4,8 @@ import type {AnnotationDocument, PageAnnotations} from "./model";
 
 const EXPORT_SCALE = 2;
 const MAX_OVERLAY_DIMENSION = 4096;
+const MOBILE_EXPORT_WARNING_BYTES = 64 * 1024 * 1024;
+const DESKTOP_EXPORT_WARNING_BYTES = 192 * 1024 * 1024;
 
 export async function createFlattenedPdf(
   source: ArrayBuffer,
@@ -55,6 +57,11 @@ export function flattenedPdfPath(sourcePath: string, copy = 1): string {
   return /\.pdf$/i.test(sourcePath)
     ? sourcePath.replace(/\.pdf$/i, suffix)
     : `${sourcePath}${suffix}`;
+}
+
+export function requiresLargeExportWarning(sourceBytes: number, isMobile: boolean): boolean {
+  const threshold = isMobile ? MOBILE_EXPORT_WARNING_BYTES : DESKTOP_EXPORT_WARNING_BYTES;
+  return sourceBytes >= threshold;
 }
 
 function hasAnnotations(page: PageAnnotations): boolean {
