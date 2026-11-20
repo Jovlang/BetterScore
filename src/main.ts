@@ -53,7 +53,8 @@ export default class BetterScorePlugin extends Plugin {
             + `${stats.mountedSurfaces} surfaces · ${stats.activeCanvases} canvases · `
             + `${stats.totalCanvasPixels.toLocaleString()} px · `
             + `${stats.queuedRenders} queued · ${stats.activeRenders} rendering · `
-            + `${stats.cancelledRenders} cancelled`,
+            + `${stats.cancelledRenders} cancelled · ${stats.cacheStrategy} cache `
+            + `(${stats.desiredPages} pages)`,
             8000
           );
         }

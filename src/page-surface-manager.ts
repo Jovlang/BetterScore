@@ -10,6 +10,11 @@ import type {ViewerState, ViewMode} from "./viewer-layout";
 
 const OBSERVER_ROOT_MARGIN = "200% 0px";
 const MAX_CONCURRENT_RENDERS = 2;
+const MAX_FULL_CACHE_PAGES = 24;
+const MAX_FULL_CACHE_SOURCE_BYTES = 48 * 1024 * 1024;
+const MAX_FULL_CACHE_CANVAS_BYTES = 192 * 1024 * 1024;
+
+export type PageCacheStrategy = "continuous" | "windowed" | "full";
 
 export interface RenderScales {
   cssScale: number;
@@ -26,6 +31,8 @@ export interface PageSurfaceStats {
   queuedRenders: number;
   activeRenders: number;
   cancelledRenders: number;
+  cacheStrategy: PageCacheStrategy;
+  desiredPages: number;
 }
 
 export interface PageSurfaceManagerCallbacks extends PageSurfacePointerHandlers {
@@ -51,6 +58,7 @@ export class PageSurfaceManager {
   private activeRenders = 0;
   private cancelledRenders = 0;
   private currentPage = 1;
+  private cacheStrategy: PageCacheStrategy = "continuous";
   private layoutState: ViewerState = createViewerState();
   private layoutGeneration = 0;
   private layoutRevision = 0;
@@ -61,7 +69,8 @@ export class PageSurfaceManager {
   constructor(
     private readonly container: HTMLElement,
     private readonly pdf: PdfDocument,
-    private readonly callbacks: PageSurfaceManagerCallbacks
+    private readonly callbacks: PageSurfaceManagerCallbacks,
+    private readonly sourceSizeBytes = Number.POSITIVE_INFINITY
   ) {
     window.addEventListener("resize", this.handleResize, {passive: true});
   }
@@ -89,7 +98,7 @@ export class PageSurfaceManager {
     this.container.dataset.viewMode = state.viewMode;
 
     const visiblePages = pagesForLayout(this.layoutState, this.pdf.numPages);
-    const pages = pagesForRenderWindow(this.layoutState, this.pdf.numPages);
+    const pages = this.renderWindowForState(this.layoutState);
     for (const pageNumber of pages) {
       const baseViewport = await this.loadPageGeometry(pageNumber);
       if (!this.isCurrentLayout(generation, revision)) return false;
@@ -191,7 +200,9 @@ export class PageSurfaceManager {
       totalCanvasPixels,
       queuedRenders: this.queuedPages.size,
       activeRenders: this.activeRenders,
-      cancelledRenders: this.cancelledRenders
+      cancelledRenders: this.cancelledRenders,
+      cacheStrategy: this.cacheStrategy,
+      desiredPages: this.desiredPages.size
     };
   }
 
@@ -231,7 +242,7 @@ export class PageSurfaceManager {
     this.layoutState = state;
     this.currentPage = state.currentPage;
     const visiblePages = pagesForLayout(state, this.pdf.numPages);
-    const renderWindow = pagesForRenderWindow(state, this.pdf.numPages);
+    const renderWindow = this.renderWindowForState(state);
     const retained = new Set(renderWindow);
 
     for (const [pageNumber, slot] of this.slots) {
@@ -360,6 +371,37 @@ export class PageSurfaceManager {
       availableHeight,
       pixelRatio
     );
+  }
+
+  private renderWindowForState(state: ViewerState): number[] {
+    if (state.viewMode === "continuous") {
+      this.cacheStrategy = "continuous";
+      return pagesForRenderWindow(state, this.pdf.numPages);
+    }
+    const estimatedCanvasBytes = this.estimatePagedCanvasBytes(state.viewMode);
+    const fullCache = shouldFullyCachePagedDocument({
+      pageCount: this.pdf.numPages,
+      sourceSizeBytes: this.sourceSizeBytes,
+      estimatedCanvasBytes
+    });
+    this.cacheStrategy = fullCache ? "full" : "windowed";
+    return fullCache
+      ? Array.from({length: this.pdf.numPages}, (_, index) => index + 1)
+      : pagesForRenderWindow(state, this.pdf.numPages);
+  }
+
+  private estimatePagedCanvasBytes(mode: ViewMode): number {
+    let total = 0;
+    for (let pageNumber = 1; pageNumber <= this.pdf.numPages; pageNumber += 1) {
+      const viewport = this.pageGeometry.get(pageNumber);
+      if (!viewport) return Number.POSITIVE_INFINITY;
+      const scales = this.scalesForPage(viewport, mode);
+      const pixelWidth = Math.ceil(viewport.width * scales.renderScale);
+      const pixelHeight = Math.ceil(viewport.height * scales.renderScale);
+      // Each mounted page owns a PDF canvas and an equally sized ink canvas.
+      total += pixelWidth * pixelHeight * 2 * 4;
+    }
+    return total;
   }
 
   private installViewportObservers(): void {
@@ -543,4 +585,17 @@ export function calculatePagedRenderScales(
     renderScale: cssScale * pixelRatio,
     pixelRatio
   };
+}
+
+export interface FullCacheEstimate {
+  pageCount: number;
+  sourceSizeBytes: number;
+  estimatedCanvasBytes: number;
+}
+
+export function shouldFullyCachePagedDocument(estimate: FullCacheEstimate): boolean {
+  return estimate.pageCount > 0
+    && estimate.pageCount <= MAX_FULL_CACHE_PAGES
+    && estimate.sourceSizeBytes <= MAX_FULL_CACHE_SOURCE_BYTES
+    && estimate.estimatedCanvasBytes <= MAX_FULL_CACHE_CANVAS_BYTES;
 }

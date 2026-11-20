@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   calculatePagedRenderScales,
-  calculateRenderScales
+  calculateRenderScales,
+  shouldFullyCachePagedDocument
 } from "../src/page-surface-manager";
 
 test("render scales fit a PDF page to the available width", () => {
@@ -20,4 +21,19 @@ test("paged render scales fit both width and height", () => {
     calculatePagedRenderScales({width: 600, height: 900}, 500, 600, 2),
     {cssScale: 2 / 3, renderScale: 4 / 3, pixelRatio: 2}
   );
+});
+
+test("full paged caching requires a small source and a safe canvas budget", () => {
+  const safe = {
+    pageCount: 8,
+    sourceSizeBytes: 8 * 1024 * 1024,
+    estimatedCanvasBytes: 96 * 1024 * 1024
+  };
+  assert.equal(shouldFullyCachePagedDocument(safe), true);
+  assert.equal(shouldFullyCachePagedDocument({...safe, pageCount: 25}), false);
+  assert.equal(shouldFullyCachePagedDocument({...safe, sourceSizeBytes: 49 * 1024 * 1024}), false);
+  assert.equal(shouldFullyCachePagedDocument({
+    ...safe,
+    estimatedCanvasBytes: 193 * 1024 * 1024
+  }), false);
 });

@@ -211,7 +211,7 @@ export class BetterScoreView extends FileView {
         onRenderError: (pageNumber, error) => {
           new Notice(`BetterScore could not render page ${pageNumber}: ${messageOf(error)}`);
         }
-      });
+      }, source.size);
       const initialState = this.navigationController.getState();
       if (await this.surfaceManager.setLayout(initialState)) {
         this.renderedViewMode = initialState.viewMode;

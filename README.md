@@ -28,6 +28,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Finger swipe and edge-tap page turns in single and spread modes
 - Persistent per-score spread pairing correction from the Spread button's right-click menu or command palette
 - Bounded neighbor prefetch so paged modes reuse rendered surfaces instead of rerendering every turn
+- Adaptive full-document paged caching for small PDFs within explicit source and canvas-memory budgets
 - Desktop and mobile support
 
 BetterScore is currently an early prototype.
