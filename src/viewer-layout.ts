@@ -27,6 +27,26 @@ export function pagesForLayout(state: ViewerState, pageCount: number): number[] 
   return spreadForPage(state.currentPage, state.spreadOffset, pageCount);
 }
 
+/** Visible pages first, then the next and previous paged layouts for prefetch. */
+export function pagesForRenderWindow(state: ViewerState, pageCount: number): number[] {
+  const visible = pagesForLayout(state, pageCount);
+  if (state.viewMode === "continuous") return visible;
+  if (state.viewMode === "single") {
+    return uniquePages([
+      ...visible,
+      clampPage(state.currentPage + 1, pageCount),
+      clampPage(state.currentPage - 1, pageCount)
+    ]);
+  }
+  const next = nextSpreadAnchor(state.currentPage, state.spreadOffset, pageCount);
+  const previous = previousSpreadAnchor(state.currentPage, state.spreadOffset, pageCount);
+  return uniquePages([
+    ...visible,
+    ...spreadForPage(next, state.spreadOffset, pageCount),
+    ...spreadForPage(previous, state.spreadOffset, pageCount)
+  ]);
+}
+
 export function spreadForPage(
   page: number,
   offset: SpreadOffset,
@@ -59,4 +79,8 @@ export function previousSpreadAnchor(
   const spread = spreadForPage(page, offset, pageCount);
   const pageBeforeSpread = Math.max(1, (spread[0] ?? page) - 1);
   return spreadForPage(pageBeforeSpread, offset, pageCount)[0] ?? 1;
+}
+
+function uniquePages(pages: number[]): number[] {
+  return [...new Set(pages)];
 }

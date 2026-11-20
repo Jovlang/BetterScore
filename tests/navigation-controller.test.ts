@@ -4,6 +4,7 @@ import {NavigationChange, NavigationController} from "../src/navigation-controll
 import {
   nextSpreadAnchor,
   pagesForLayout,
+  pagesForRenderWindow,
   previousSpreadAnchor,
   spreadForPage
 } from "../src/viewer-layout";
@@ -94,4 +95,19 @@ test("spread correction changes pairing without changing the active page", () =>
   navigation.setSpreadOffset(1);
   assert.equal(navigation.getState().currentPage, 5);
   assert.deepEqual(pagesForLayout(navigation.getState(), 10), [5, 6]);
+});
+
+test("paged render windows put visible pages first and prefetch bounded neighbors", () => {
+  assert.deepEqual(
+    pagesForRenderWindow({viewMode: "single", currentPage: 5, spreadOffset: 0}, 10),
+    [5, 6, 4]
+  );
+  assert.deepEqual(
+    pagesForRenderWindow({viewMode: "spread", currentPage: 5, spreadOffset: 0}, 10),
+    [4, 5, 6, 7, 2, 3]
+  );
+  assert.deepEqual(
+    pagesForRenderWindow({viewMode: "spread", currentPage: 1, spreadOffset: 0}, 10),
+    [1, 2, 3]
+  );
 });

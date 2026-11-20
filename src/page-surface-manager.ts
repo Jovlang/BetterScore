@@ -1,6 +1,11 @@
 import {PageSurface, PageSurfacePointerHandlers} from "./page-surface";
 import type {PdfDocument, PdfViewport} from "./pdf-types";
-import {clampPage, createViewerState, pagesForLayout} from "./viewer-layout";
+import {
+  clampPage,
+  createViewerState,
+  pagesForLayout,
+  pagesForRenderWindow
+} from "./viewer-layout";
 import type {ViewerState, ViewMode} from "./viewer-layout";
 
 const OBSERVER_ROOT_MARGIN = "200% 0px";
@@ -48,6 +53,7 @@ export class PageSurfaceManager {
   private currentPage = 1;
   private layoutState: ViewerState = createViewerState();
   private layoutGeneration = 0;
+  private layoutRevision = 0;
   private scrollFrame: number | null = null;
   private resizeFrame: number | null = null;
   private disposed = false;
@@ -65,22 +71,32 @@ export class PageSurfaceManager {
   }
 
   /** Rebuild only the layout; PDF geometry and the annotation model stay shared. */
-  async setLayout(state: ViewerState): Promise<boolean> {
+  async setLayout(state: ViewerState, forceRebuild = false): Promise<boolean> {
     if (this.disposed) return false;
+    const normalized = {...state, currentPage: clampPage(state.currentPage, this.pdf.numPages)};
+    if (
+      !forceRebuild
+      && normalized.viewMode !== "continuous"
+      && normalized.viewMode === this.layoutState.viewMode
+    ) {
+      return this.updatePagedLayout(normalized);
+    }
     const generation = ++this.layoutGeneration;
-    this.layoutState = {...state, currentPage: clampPage(state.currentPage, this.pdf.numPages)};
+    const revision = ++this.layoutRevision;
+    this.layoutState = normalized;
     this.currentPage = this.layoutState.currentPage;
     this.resetLayout();
     this.container.dataset.viewMode = state.viewMode;
 
-    const pages = pagesForLayout(this.layoutState, this.pdf.numPages);
+    const visiblePages = pagesForLayout(this.layoutState, this.pdf.numPages);
+    const pages = pagesForRenderWindow(this.layoutState, this.pdf.numPages);
     for (const pageNumber of pages) {
       const baseViewport = await this.loadPageGeometry(pageNumber);
-      if (!this.isCurrentGeneration(generation)) return false;
-      this.createSlot(pageNumber, baseViewport, state.viewMode, pages);
+      if (!this.isCurrentLayout(generation, revision)) return false;
+      this.createSlot(pageNumber, baseViewport, state.viewMode);
     }
 
-    if (!this.isCurrentGeneration(generation)) return false;
+    if (!this.isCurrentLayout(generation, revision)) return false;
     if (state.viewMode === "continuous") {
       this.positionSlot(this.currentPage, "auto");
       this.installViewportObservers();
@@ -89,6 +105,8 @@ export class PageSurfaceManager {
         for (const pageNumber of pages) this.requestRender(pageNumber);
       }
     } else {
+      this.applyPagedSlotVisibility(visiblePages);
+      for (const pageNumber of visiblePages) this.requestRender(pageNumber, true);
       for (const pageNumber of pages) this.requestRender(pageNumber);
     }
     return true;
@@ -181,6 +199,7 @@ export class PageSurfaceManager {
     if (this.disposed) return;
     this.disposed = true;
     this.layoutGeneration += 1;
+    this.layoutRevision += 1;
     window.removeEventListener("resize", this.handleResize);
     if (this.resizeFrame !== null) window.cancelAnimationFrame(this.resizeFrame);
     this.resizeFrame = null;
@@ -204,6 +223,38 @@ export class PageSurfaceManager {
     this.mounting.clear();
     this.slots.clear();
     this.container.empty();
+  }
+
+  private async updatePagedLayout(state: ViewerState): Promise<boolean> {
+    const revision = ++this.layoutRevision;
+    const generation = this.layoutGeneration;
+    this.layoutState = state;
+    this.currentPage = state.currentPage;
+    const visiblePages = pagesForLayout(state, this.pdf.numPages);
+    const renderWindow = pagesForRenderWindow(state, this.pdf.numPages);
+    const retained = new Set(renderWindow);
+
+    for (const [pageNumber, slot] of this.slots) {
+      if (retained.has(pageNumber)) continue;
+      this.desiredPages.delete(pageNumber);
+      this.evictPage(pageNumber);
+      slot.remove();
+      this.slots.delete(pageNumber);
+    }
+    this.applyPagedSlotVisibility(visiblePages);
+
+    for (const pageNumber of renderWindow) {
+      if (this.slots.has(pageNumber)) continue;
+      const baseViewport = await this.loadPageGeometry(pageNumber);
+      if (!this.isCurrentLayout(generation, revision)) return false;
+      this.createSlot(pageNumber, baseViewport, state.viewMode);
+    }
+
+    if (!this.isCurrentLayout(generation, revision)) return false;
+    this.applyPagedSlotVisibility(visiblePages);
+    this.renderWindow(renderWindow);
+    for (const pageNumber of visiblePages) this.requestRender(pageNumber, true);
+    return true;
   }
 
   private async createSurface(pageNumber: number, generation: number): Promise<PageSurface> {
@@ -258,23 +309,38 @@ export class PageSurfaceManager {
   private createSlot(
     pageNumber: number,
     baseViewport: PdfViewport,
-    mode: ViewMode,
-    layoutPages: number[]
+    mode: ViewMode
   ): void {
     const scales = this.scalesForPage(baseViewport, mode);
     const slot = this.container.createDiv({cls: "betterscore-page betterscore-page-placeholder"});
     slot.dataset.page = String(pageNumber);
     slot.style.width = `${baseViewport.width * scales.cssScale}px`;
     slot.style.height = `${baseViewport.height * scales.cssScale}px`;
-    if (mode === "spread") {
-      const rightOnly = layoutPages.length === 1
-        && this.layoutState.spreadOffset === 0
-        && pageNumber === 1;
-      slot.addClass(rightOnly || layoutPages[1] === pageNumber
-        ? "betterscore-spread-right"
-        : "betterscore-spread-left");
-    }
     this.slots.set(pageNumber, slot);
+  }
+
+  private applyPagedSlotVisibility(visiblePages: number[]): void {
+    const visible = new Set(visiblePages);
+    for (const [pageNumber, slot] of this.slots) {
+      slot.toggleClass("betterscore-page-cached", !visible.has(pageNumber));
+      slot.removeClass("betterscore-spread-left", "betterscore-spread-right");
+    }
+    if (this.layoutState.viewMode === "spread") {
+      for (const pageNumber of visiblePages) {
+        const slot = this.slots.get(pageNumber);
+        if (!slot) continue;
+        const rightOnly = visiblePages.length === 1
+          && this.layoutState.spreadOffset === 0
+          && pageNumber === 1;
+        slot.addClass(rightOnly || visiblePages[1] === pageNumber
+          ? "betterscore-spread-right"
+          : "betterscore-spread-left");
+      }
+    }
+    for (const pageNumber of visiblePages) {
+      const slot = this.slots.get(pageNumber);
+      if (slot) this.container.appendChild(slot);
+    }
   }
 
   private scalesForPage(baseViewport: PdfViewport, mode: ViewMode): RenderScales {
@@ -318,14 +384,26 @@ export class PageSurfaceManager {
     for (const slot of this.slots.values()) this.observer.observe(slot);
   }
 
-  private requestRender(pageNumber: number): void {
+  private requestRender(pageNumber: number, priority = false): void {
     if (this.disposed || !this.slots.has(pageNumber)) return;
     if (pageNumber < 1 || pageNumber > this.pdf.numPages) return;
     this.desiredPages.add(pageNumber);
     const surface = this.surfaces.get(pageNumber);
-    if (surface?.isPdfRendered() || this.queuedPages.has(pageNumber)) return;
+    if (surface?.isPdfRendered()) return;
+    if (this.queuedPages.has(pageNumber)) {
+      if (priority) {
+        const index = this.renderQueue.findIndex((queued) => queued.pageNumber === pageNumber);
+        if (index > 0) {
+          const [queued] = this.renderQueue.splice(index, 1);
+          if (queued) this.renderQueue.unshift(queued);
+        }
+      }
+      return;
+    }
     this.queuedPages.add(pageNumber);
-    this.renderQueue.push({pageNumber, generation: this.layoutGeneration});
+    const queued = {pageNumber, generation: this.layoutGeneration};
+    if (priority) this.renderQueue.unshift(queued);
+    else this.renderQueue.push(queued);
     this.drainRenderQueue();
   }
 
@@ -412,6 +490,10 @@ export class PageSurfaceManager {
     return !this.disposed && generation === this.layoutGeneration;
   }
 
+  private isCurrentLayout(generation: number, revision: number): boolean {
+    return this.isCurrentGeneration(generation) && revision === this.layoutRevision;
+  }
+
   private readonly handleScroll = (): void => {
     this.scheduleCurrentPageUpdate();
   };
@@ -420,7 +502,7 @@ export class PageSurfaceManager {
     if (this.resizeFrame !== null || this.disposed) return;
     this.resizeFrame = window.requestAnimationFrame(() => {
       this.resizeFrame = null;
-      void this.setLayout(this.layoutState);
+      void this.setLayout(this.layoutState, true);
     });
   };
 }

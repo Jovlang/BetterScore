@@ -115,6 +115,10 @@
   background: color-mix(in srgb, white 96%, var(--background-secondary));
 }
 
+.betterscore-page-cached {
+  display: none;
+}
+
 .betterscore-pdf-canvas,
 .betterscore-ink-canvas {
   display: block;
