@@ -18,6 +18,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Serialized, revision-aware saves that flush on background and close
 - Compact tuple-based sidecars with live sample filtering and stroke simplification
 - PDF fingerprints and automatic sidecar moves when source PDFs are renamed
+- A fuzzy BetterScore quick switcher containing every PDF in the vault
 - Desktop and mobile support
 
 BetterScore is currently an early prototype.

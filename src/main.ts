@@ -1,6 +1,7 @@
 import {Notice, Plugin, TFile, WorkspaceLeaf} from "obsidian";
 import {AnnotationStore} from "./annotation-store";
 import {BetterScoreView, VIEW_TYPE_BETTERSCORE} from "./score-view";
+import {ScoreSwitcherModal} from "./score-switcher";
 import {BetterScoreSettings, EraserMode, normalizeSettings} from "./settings";
 
 export default class BetterScorePlugin extends Plugin {
@@ -29,6 +30,15 @@ export default class BetterScorePlugin extends Plugin {
         if (!checking) void this.openScore(file);
         return true;
       }
+    });
+
+    this.addCommand({
+      id: "open-score-switcher",
+      name: "Open score switcher",
+      callback: () => this.openScoreSwitcher()
+    });
+    this.addRibbonIcon("music-2", "Open BetterScore score switcher", () => {
+      this.openScoreSwitcher();
     });
 
     this.registerEvent(
@@ -65,6 +75,17 @@ export default class BetterScorePlugin extends Plugin {
       highlighterWidth: width
     });
     await this.saveData(this.pluginSettings);
+  }
+
+  private openScoreSwitcher(): void {
+    const hasPdfs = this.app.vault.getFiles().some((file) => isPdf(file));
+    if (!hasPdfs) {
+      new Notice("BetterScore: No PDF files found in this vault.");
+      return;
+    }
+    new ScoreSwitcherModal(this.app, (file) => {
+      void this.openScore(file);
+    }).open();
   }
 
   private async setEraserMode(mode: EraserMode): Promise<void> {
