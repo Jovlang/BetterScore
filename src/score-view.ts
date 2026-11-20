@@ -24,6 +24,7 @@ import type {PdfDocument} from "./pdf-types";
 import {ThumbnailStrip} from "./thumbnail-strip";
 import {createViewerState} from "./viewer-layout";
 import type {SpreadOffset, ViewerState, ViewMode} from "./viewer-layout";
+import {normalizeWheelDelta, zoomStepsForWheelDelta} from "./zoom-input";
 import {
   AnnotationDocument,
   AnnotationTool,
@@ -88,6 +89,8 @@ export class BetterScoreView extends FileView {
   private zoomResetButton: HTMLButtonElement | null = null;
   private exportButton: HTMLButtonElement | null = null;
   private spreadModeButton: HTMLButtonElement | null = null;
+  private wheelZoomDelta = 0;
+  private wheelZoomTimer: number | null = null;
   private readonly viewModeButtons = new Map<ViewMode, HTMLButtonElement>();
 
   constructor(
@@ -107,6 +110,12 @@ export class BetterScoreView extends FileView {
       (error) => this.reportSaveError(error)
     );
     this.registerDomEvent(document, "keydown", (event) => this.handleKeyboardShortcut(event));
+    this.registerDomEvent(
+      this.contentEl,
+      "wheel",
+      (event) => this.handleZoomWheel(event),
+      {passive: false}
+    );
     this.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "hidden") void this.flushSave();
     });
@@ -202,6 +211,7 @@ export class BetterScoreView extends FileView {
   }
 
   private async openScore(file: TFile): Promise<void> {
+    this.clearWheelZoom();
     this.undoStack = [];
     this.redoStack = [];
     this.navigationController = null;
@@ -803,6 +813,43 @@ export class BetterScoreView extends FileView {
     return false;
   }
 
+  private handleZoomWheel(event: WheelEvent): void {
+    const target = event.target;
+    if (
+      !event.ctrlKey
+      || !this.surfaceManager
+      || !this.scoreContainer
+      || !(target instanceof Node)
+      || !this.scoreContainer.contains(target)
+    ) {
+      return;
+    }
+    const delta = normalizeWheelDelta(
+      event.deltaY,
+      event.deltaMode,
+      this.scoreContainer.clientHeight
+    );
+    if (delta === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.wheelZoomDelta += delta;
+    if (this.wheelZoomTimer !== null) window.clearTimeout(this.wheelZoomTimer);
+    this.wheelZoomTimer = window.setTimeout(() => this.flushWheelZoom(), 60);
+  }
+
+  private flushWheelZoom(): void {
+    const steps = zoomStepsForWheelDelta(this.wheelZoomDelta);
+    this.wheelZoomDelta = 0;
+    this.wheelZoomTimer = null;
+    if (steps !== 0) this.changeZoom(steps * 0.25);
+  }
+
+  private clearWheelZoom(): void {
+    if (this.wheelZoomTimer !== null) window.clearTimeout(this.wheelZoomTimer);
+    this.wheelZoomTimer = null;
+    this.wheelZoomDelta = 0;
+  }
+
   private handleHistoryShortcut(event: KeyboardEvent): boolean {
     if (this.app.workspace.getActiveViewOfType(BetterScoreView) !== this) return false;
     const modifier = event.metaKey || event.ctrlKey;
@@ -887,6 +934,7 @@ export class BetterScoreView extends FileView {
   }
 
   private async destroyPdf(): Promise<void> {
+    this.clearWheelZoom();
     this.thumbnailStrip?.dispose();
     this.thumbnailStrip = null;
     this.surfaceManager?.dispose();
