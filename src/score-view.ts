@@ -14,6 +14,7 @@ import {precisionErase, strokeIntersectsEraser} from "./eraser";
 import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
 import {SaveCoordinator} from "./save-coordinator";
 import {NavigationChange, NavigationController} from "./navigation-controller";
+import {routePointerInput} from "./input-router";
 import {PageSurface} from "./page-surface";
 import {PageSurfaceManager} from "./page-surface-manager";
 import type {PageSurfaceStats} from "./page-surface-manager";
@@ -332,8 +333,9 @@ export class BetterScoreView extends FileView {
 
   private handlePointerDown(surface: PageSurface, event: PointerEvent): void {
     const {pageNumber} = surface;
-    // A finger navigates the score; Pencil/stylus and mouse create annotations.
-    if (event.pointerType === "touch" && this.tool !== "text") return;
+    const viewMode = this.navigationController?.getState().viewMode ?? "continuous";
+    // Phase 6 will hand page-navigation gestures to its swipe/click adapter.
+    if (routePointerInput(event.pointerType, viewMode) !== "annotation") return;
     if (event.button !== 0 && event.pointerType === "mouse") return;
     if (!this.annotationsWritable) {
       new Notice(`BetterScore: ${this.annotationBlockReason}`);

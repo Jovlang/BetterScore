@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {NavigationChange, NavigationController} from "../src/navigation-controller";
-import {pagesForLayout, spreadPages} from "../src/viewer-layout";
+import {
+  nextSpreadAnchor,
+  pagesForLayout,
+  previousSpreadAnchor,
+  spreadForPage
+} from "../src/viewer-layout";
 
 test("navigation clamps pages and identifies viewport changes", () => {
   const changes: NavigationChange[] = [];
@@ -23,12 +28,24 @@ test("changing mode preserves the current page", () => {
 });
 
 test("spread pairing supports book and corrected offsets", () => {
-  assert.deepEqual(spreadPages(1, 8, 0), [1]);
-  assert.deepEqual(spreadPages(2, 8, 0), [2, 3]);
-  assert.deepEqual(spreadPages(3, 8, 0), [2, 3]);
-  assert.deepEqual(spreadPages(1, 8, 1), [1, 2]);
-  assert.deepEqual(spreadPages(2, 8, 1), [1, 2]);
-  assert.deepEqual(spreadPages(8, 8, 1), [7, 8]);
+  assert.deepEqual(spreadForPage(1, 0, 8), [1]);
+  assert.deepEqual(spreadForPage(2, 0, 8), [2, 3]);
+  assert.deepEqual(spreadForPage(3, 0, 8), [2, 3]);
+  assert.deepEqual(spreadForPage(1, 1, 8), [1, 2]);
+  assert.deepEqual(spreadForPage(2, 1, 8), [1, 2]);
+  assert.deepEqual(spreadForPage(8, 1, 8), [7, 8]);
+});
+
+test("spread anchors are pure and clamp at document boundaries", () => {
+  assert.equal(nextSpreadAnchor(1, 0, 8), 2);
+  assert.equal(nextSpreadAnchor(3, 0, 8), 4);
+  assert.equal(nextSpreadAnchor(8, 0, 8), 8);
+  assert.equal(previousSpreadAnchor(8, 0, 8), 6);
+  assert.equal(previousSpreadAnchor(2, 0, 8), 1);
+  assert.equal(previousSpreadAnchor(1, 0, 8), 1);
+
+  assert.equal(nextSpreadAnchor(2, 1, 8), 3);
+  assert.equal(previousSpreadAnchor(3, 1, 8), 1);
 });
 
 test("mode-aware next and previous use spread boundaries", () => {
@@ -57,4 +74,14 @@ test("layout calculation uses one shared viewer state", () => {
     pagesForLayout({viewMode: "continuous", currentPage: 4, spreadOffset: 0}, 10).length,
     10
   );
+});
+
+test("currentPage remains the active PDF page when its spread starts earlier", () => {
+  const navigation = new NavigationController(10, () => undefined);
+  navigation.goToPage(5);
+  navigation.setViewMode("spread");
+  assert.equal(navigation.getState().currentPage, 5);
+  assert.deepEqual(pagesForLayout(navigation.getState(), 10), [4, 5]);
+  navigation.setViewMode("single");
+  assert.equal(navigation.getState().currentPage, 5);
 });

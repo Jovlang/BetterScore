@@ -21,6 +21,8 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - PDF fingerprints and automatic sidecar moves when source PDFs are renamed
 - A fuzzy BetterScore quick switcher containing every PDF in the vault
 - Shared continuous/single/spread viewer state and a mode-aware navigation controller
+- Pure, DOM-independent spread pairing and transition functions
+- Central Pencil, finger, and mouse input routing policy
 - Page navigation from arrow keys, Page Up/Down, Home/End, and command-palette actions
 - Desktop and mobile support
 
@@ -54,7 +56,7 @@ Run **BetterScore: Show render statistics** from the command palette while a sco
 
 For a PDF named `Requiem.pdf`, BetterScore creates `Requiem.betterscore.json`. Coordinates and widths are normalized to the PDF page so annotations remain aligned at different display sizes.
 
-The format is versioned and migrations are handled when sidecars are loaded. Format v5 identifies the source PDF using its size and a SHA-256 fingerprint of its first and last 64 KiB. A matching fingerprint allows moved files to self-heal their stored path; mismatched content is never allowed to overwrite an existing sidecar silently.
+The format is versioned and migrations are handled when sidecars are loaded. Format v5 identifies the source PDF using its size and a replacement fingerprint derived from its first and last 64 KiB. This is an efficient accidental-replacement check, not a full-file content hash. A matching fingerprint allows moved files to self-heal their stored path; mismatched content is never allowed to overwrite an existing sidecar silently.
 
 ## Roadmap
 

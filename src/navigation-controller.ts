@@ -4,7 +4,8 @@ import {
   ViewMode,
   clampPage,
   createViewerState,
-  spreadPages
+  nextSpreadAnchor,
+  previousSpreadAnchor
 } from "./viewer-layout";
 
 export type NavigationCause = "command" | "viewport" | "mode";
@@ -61,26 +62,19 @@ export class NavigationController {
   }
 
   nextSpread(): void {
-    const pages = spreadPages(
+    this.goToPage(nextSpreadAnchor(
       this.state.currentPage,
-      this.pageCount,
-      this.state.spreadOffset
-    );
-    this.goToPage((pages.at(-1) ?? this.state.currentPage) + 1);
+      this.state.spreadOffset,
+      this.pageCount
+    ));
   }
 
   previousSpread(): void {
-    const pages = spreadPages(
+    this.goToPage(previousSpreadAnchor(
       this.state.currentPage,
-      this.pageCount,
-      this.state.spreadOffset
-    );
-    const previous = spreadPages(
-      Math.max(1, (pages[0] ?? this.state.currentPage) - 1),
-      this.pageCount,
-      this.state.spreadOffset
-    );
-    this.goToPage(previous[0] ?? 1);
+      this.state.spreadOffset,
+      this.pageCount
+    ));
   }
 
   next(): void {

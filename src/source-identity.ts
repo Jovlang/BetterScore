@@ -3,8 +3,9 @@ import type {SourceIdentity} from "./model";
 const FINGERPRINT_CHUNK_SIZE = 64 * 1024;
 
 /**
- * Identify a PDF without hashing the entire potentially large file. The size,
- * first 64 KiB, and last 64 KiB are hashed together.
+ * Create a cheap replacement fingerprint without hashing the entire potentially
+ * large file. This is not a full-file content hash: the size, first 64 KiB, and
+ * last 64 KiB are hashed together.
  */
 export async function createSourceIdentity(
   path: string,
