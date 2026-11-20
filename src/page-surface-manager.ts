@@ -131,6 +131,23 @@ export class PageSurfaceManager {
     return this.currentPage;
   }
 
+  scrollToPage(pageNumber: number, behavior: ScrollBehavior = "auto"): boolean {
+    const slot = this.slots.get(pageNumber);
+    if (!slot) return false;
+    this.requestRender(pageNumber);
+    if (pageNumber !== this.currentPage) {
+      this.currentPage = pageNumber;
+      this.callbacks.onCurrentPageChange?.(pageNumber);
+    }
+    const containerBounds = this.container.getBoundingClientRect();
+    const slotBounds = slot.getBoundingClientRect();
+    this.container.scrollTo({
+      top: this.container.scrollTop + slotBounds.top - containerBounds.top,
+      behavior
+    });
+    return true;
+  }
+
   getStats(): PageSurfaceStats {
     let totalCanvasPixels = 0;
     for (const surface of this.surfaces.values()) {

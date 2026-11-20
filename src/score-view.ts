@@ -13,10 +13,12 @@ import {AnnotationStore, PreparedAnnotationSave} from "./annotation-store";
 import {precisionErase, strokeIntersectsEraser} from "./eraser";
 import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
 import {SaveCoordinator} from "./save-coordinator";
+import {NavigationChange, NavigationController} from "./navigation-controller";
 import {PageSurface} from "./page-surface";
 import {PageSurfaceManager} from "./page-surface-manager";
 import type {PageSurfaceStats} from "./page-surface-manager";
 import type {PdfDocument} from "./pdf-types";
+import type {ViewerState, ViewMode} from "./viewer-layout";
 import {
   AnnotationDocument,
   AnnotationTool,
@@ -50,13 +52,13 @@ export class BetterScoreView extends FileView {
   private annotationsWritable = true;
   private annotationBlockReason = "";
   private surfaceManager: PageSurfaceManager | null = null;
+  private navigationController: NavigationController | null = null;
   private tool: ActiveTool = "pen";
   private undoStack: AnnotationDocument[] = [];
   private redoStack: AnnotationDocument[] = [];
   private readonly saveCoordinator: SaveCoordinator<PreparedAnnotationSave>;
   private activeStroke: Stroke | null = null;
   private activePage: number | null = null;
-  private currentPage = 1;
   private toolbar: HTMLElement | null = null;
   private scoreContainer: HTMLElement | null = null;
   private undoButton: HTMLButtonElement | null = null;
@@ -78,7 +80,7 @@ export class BetterScoreView extends FileView {
       500,
       (error) => this.reportSaveError(error)
     );
-    this.registerDomEvent(document, "keydown", (event) => this.handleHistoryShortcut(event));
+    this.registerDomEvent(document, "keydown", (event) => this.handleKeyboardShortcut(event));
     this.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "hidden") void this.flushSave();
     });
@@ -100,6 +102,26 @@ export class BetterScoreView extends FileView {
     return this.surfaceManager?.getStats() ?? null;
   }
 
+  getViewerState(): ViewerState | null {
+    return this.navigationController?.getState() ?? null;
+  }
+
+  goToPage(pageNumber: number): void {
+    this.navigationController?.goToPage(pageNumber);
+  }
+
+  navigateNext(): void {
+    this.navigationController?.next();
+  }
+
+  navigatePrevious(): void {
+    this.navigationController?.previous();
+  }
+
+  setViewMode(mode: ViewMode): void {
+    this.navigationController?.setViewMode(mode);
+  }
+
   async onLoadFile(file: TFile): Promise<void> {
     await super.onLoadFile(file);
     await this.openScore(file);
@@ -119,7 +141,7 @@ export class BetterScoreView extends FileView {
   private async openScore(file: TFile): Promise<void> {
     this.undoStack = [];
     this.redoStack = [];
-    this.currentPage = 1;
+    this.navigationController = null;
     this.annotationsWritable = true;
     this.annotationBlockReason = "";
     this.contentEl.empty();
@@ -143,6 +165,10 @@ export class BetterScoreView extends FileView {
         new Notice(`BetterScore: ${this.annotationBlockReason}`);
       }
       this.pdf = (await pdfjs.getDocument({data}).promise) as PdfDocument;
+      this.navigationController = new NavigationController(
+        this.pdf.numPages,
+        (change) => this.handleNavigationChange(change)
+      );
       this.scoreContainer.empty();
       this.surfaceManager = new PageSurfaceManager(this.scoreContainer, this.pdf, {
         onPointerDown: (surface, event) => this.handlePointerDown(surface, event),
@@ -150,7 +176,7 @@ export class BetterScoreView extends FileView {
         onPointerEnd: (surface, event) => this.handlePointerEnd(surface, event),
         drawAnnotations: (surface) => this.drawSurface(surface),
         onCurrentPageChange: (pageNumber) => {
-          this.currentPage = pageNumber;
+          this.navigationController?.syncViewportPage(pageNumber);
         },
         onRenderError: (pageNumber, error) => {
           new Notice(`BetterScore could not render page ${pageNumber}: ${messageOf(error)}`);
@@ -474,10 +500,31 @@ export class BetterScoreView extends FileView {
     if (this.redoButton) this.redoButton.disabled = this.redoStack.length === 0;
   }
 
-  private handleHistoryShortcut(event: KeyboardEvent): void {
+  private handleKeyboardShortcut(event: KeyboardEvent): void {
+    if (this.handleHistoryShortcut(event)) return;
     if (this.app.workspace.getActiveViewOfType(BetterScoreView) !== this) return;
+    if (isTextInput(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
+
+    if (event.key === "ArrowRight" || event.key === "PageDown") {
+      event.preventDefault();
+      this.navigationController?.next();
+    } else if (event.key === "ArrowLeft" || event.key === "PageUp") {
+      event.preventDefault();
+      this.navigationController?.previous();
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      this.navigationController?.goToPage(1);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      const pageCount = this.pdf?.numPages ?? 1;
+      this.navigationController?.goToPage(pageCount);
+    }
+  }
+
+  private handleHistoryShortcut(event: KeyboardEvent): boolean {
+    if (this.app.workspace.getActiveViewOfType(BetterScoreView) !== this) return false;
     const modifier = event.metaKey || event.ctrlKey;
-    if (!modifier || event.altKey) return;
+    if (!modifier || event.altKey) return false;
 
     const key = event.key.toLowerCase();
     const wantsUndo = key === "z" && !event.shiftKey;
@@ -486,10 +533,20 @@ export class BetterScoreView extends FileView {
       event.preventDefault();
       event.stopPropagation();
       this.undo();
+      return true;
     } else if (wantsRedo && this.redoStack.length > 0) {
       event.preventDefault();
       event.stopPropagation();
       this.redo();
+      return true;
+    }
+    return false;
+  }
+
+  private handleNavigationChange(change: NavigationChange): void {
+    if (change.cause === "viewport") return;
+    if (change.state.viewMode === "continuous") {
+      this.surfaceManager?.scrollToPage(change.state.currentPage, "auto");
     }
   }
 
@@ -530,6 +587,7 @@ export class BetterScoreView extends FileView {
     if (!this.pdf) return;
     await this.pdf.destroy();
     this.pdf = null;
+    this.navigationController = null;
   }
 }
 
@@ -643,6 +701,13 @@ class TextAnnotationModal extends Modal {
   onClose(): void {
     this.contentEl.empty();
   }
+}
+
+function isTextInput(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || (target instanceof HTMLElement && target.isContentEditable);
 }
 
 function messageOf(error: unknown): string {

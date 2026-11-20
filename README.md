@@ -20,6 +20,8 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Compact tuple-based sidecars with live sample filtering and stroke simplification
 - PDF fingerprints and automatic sidecar moves when source PDFs are renamed
 - A fuzzy BetterScore quick switcher containing every PDF in the vault
+- Shared continuous/single/spread viewer state and a mode-aware navigation controller
+- Page navigation from arrow keys, Page Up/Down, Home/End, and command-palette actions
 - Desktop and mobile support
 
 BetterScore is currently an early prototype.
@@ -44,7 +46,7 @@ npm run verify
 
 ## Rendering architecture
 
-`PageSurface` owns the PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one mounted page. `PageSurfaceManager` creates lightweight placeholders for every page, observes a generous viewport margin, limits concurrent renders, evicts distant canvases, tracks the viewport-centered current page, and exposes render-memory statistics. The score view coordinates annotations and tools without constructing PDF canvases directly.
+`PageSurface` owns the PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one mounted page. `PageSurfaceManager` creates lightweight placeholders for every page, observes a generous viewport margin, limits concurrent renders, evicts distant canvases, tracks the viewport-centered current page, and exposes render-memory statistics. `NavigationController` owns the shared viewer state and all page transitions, while the score view coordinates annotations, tools, and input adapters without constructing PDF canvases directly.
 
 Run **BetterScore: Show render statistics** from the command palette while a score is active to inspect mounted surfaces, canvases, pixel area, render queues, cancellations, and the viewport-centered page.
 
@@ -56,10 +58,11 @@ The format is versioned and migrations are handled when sidecars are loaded. For
 
 ## Roadmap
 
-- [ ] Add viewport-based lazy rendering for large scores and mobile memory limits
+- [x] Add viewport-based lazy rendering for large scores and mobile memory limits
+- [x] Establish shared continuous/single/spread state and one navigation API
 - [ ] Add a view-mode switch between continuous vertical scrolling and page-by-page flipping
 - [ ] Add a dual-page spread for landscape screens with correct left/right page pairing
-- [ ] Preserve the current page when switching viewing modes
+- [x] Preserve the current page in the shared state when switching viewing modes
 - [ ] Advance dual-page spreads by two pages while allowing single-page correction
 - [ ] Support click, swipe, keyboard, and later pedal-based page turns
 - [ ] Add zoom, thumbnails, and flattened PDF export

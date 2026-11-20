@@ -57,6 +57,26 @@ export default class BetterScorePlugin extends Plugin {
         return true;
       }
     });
+    this.addCommand({
+      id: "next-page",
+      name: "Next page",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BetterScoreView);
+        if (!view?.getViewerState()) return false;
+        if (!checking) view.navigateNext();
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "previous-page",
+      name: "Previous page",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BetterScoreView);
+        if (!view?.getViewerState()) return false;
+        if (!checking) view.navigatePrevious();
+        return true;
+      }
+    });
     this.addRibbonIcon("music-2", "Open BetterScore score switcher", () => {
       this.openScoreSwitcher();
     });
