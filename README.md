@@ -41,6 +41,10 @@ npm run verify
 
 `npm run verify` runs the TypeScript check, model tests, and production build.
 
+## Rendering architecture
+
+`PageSurface` owns the DOM, PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one page. `PageSurfaceManager` owns mounted surfaces, page geometry, deduplicated mount operations, rendering, eviction, and disposal. The score view coordinates annotations and tools without constructing PDF canvases directly. This boundary is the foundation for viewport-based lazy rendering and alternate page layouts.
+
 ## Annotation format
 
 For a PDF named `Requiem.pdf`, BetterScore creates `Requiem.betterscore.json`. Coordinates and widths are normalized to the PDF page so annotations remain aligned at different display sizes.

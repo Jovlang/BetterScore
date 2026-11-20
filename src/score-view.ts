@@ -13,6 +13,9 @@ import {AnnotationStore, PreparedAnnotationSave} from "./annotation-store";
 import {precisionErase, strokeIntersectsEraser} from "./eraser";
 import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
 import {SaveCoordinator} from "./save-coordinator";
+import {PageSurface} from "./page-surface";
+import {PageSurfaceManager} from "./page-surface-manager";
+import type {PdfDocument} from "./pdf-types";
 import {
   AnnotationDocument,
   AnnotationTool,
@@ -35,31 +38,6 @@ export const VIEW_TYPE_BETTERSCORE = "betterscore-pdf";
 
 type ActiveTool = AnnotationTool | "eraser" | "text";
 
-interface PdfViewport {
-  width: number;
-  height: number;
-}
-
-interface PdfPage {
-  getViewport(options: {scale: number}): PdfViewport;
-  render(options: {
-    canvasContext: CanvasRenderingContext2D;
-    viewport: PdfViewport;
-  }): {promise: Promise<void>};
-}
-
-interface PdfDocument {
-  numPages: number;
-  getPage(pageNumber: number): Promise<PdfPage>;
-  destroy(): Promise<void>;
-}
-
-interface PageSurface {
-  pageNumber: number;
-  overlay: HTMLCanvasElement;
-  context: CanvasRenderingContext2D;
-}
-
 export class BetterScoreView extends FileView {
   private readonly store = new AnnotationStore(this.app.vault);
   private pdf: PdfDocument | null = null;
@@ -70,7 +48,7 @@ export class BetterScoreView extends FileView {
   });
   private annotationsWritable = true;
   private annotationBlockReason = "";
-  private surfaces = new Map<number, PageSurface>();
+  private surfaceManager: PageSurfaceManager | null = null;
   private tool: ActiveTool = "pen";
   private undoStack: AnnotationDocument[] = [];
   private redoStack: AnnotationDocument[] = [];
@@ -124,7 +102,6 @@ export class BetterScoreView extends FileView {
   async onUnloadFile(file: TFile): Promise<void> {
     await this.flushSave();
     await this.destroyPdf();
-    this.surfaces.clear();
     await super.onUnloadFile(file);
   }
 
@@ -160,8 +137,16 @@ export class BetterScoreView extends FileView {
       }
       this.pdf = (await pdfjs.getDocument({data}).promise) as PdfDocument;
       this.scoreContainer.empty();
-      await this.renderPages();
+      this.surfaceManager = new PageSurfaceManager(this.scoreContainer, this.pdf, {
+        onPointerDown: (surface, event) => this.handlePointerDown(surface, event),
+        onPointerMove: (surface, event) => this.handlePointerMove(surface, event),
+        onPointerEnd: (surface, event) => this.handlePointerEnd(surface, event),
+        drawAnnotations: (surface) => this.drawSurface(surface)
+      });
+      await this.surfaceManager.renderAll();
     } catch (error) {
+      this.surfaceManager?.dispose();
+      this.surfaceManager = null;
       this.scoreContainer.empty();
       this.scoreContainer.createDiv({
         cls: "betterscore-error",
@@ -306,135 +291,78 @@ export class BetterScoreView extends FileView {
     });
   }
 
-  private async renderPages(): Promise<void> {
-    if (!this.pdf || !this.scoreContainer) return;
-    const availableWidth = Math.max(320, this.scoreContainer.clientWidth - 32);
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  private handlePointerDown(surface: PageSurface, event: PointerEvent): void {
+    const {pageNumber} = surface;
+    // A finger navigates the score; Pencil/stylus and mouse create annotations.
+    if (event.pointerType === "touch" && this.tool !== "text") return;
+    if (event.button !== 0 && event.pointerType === "mouse") return;
+    if (!this.annotationsWritable) {
+      new Notice(`BetterScore: ${this.annotationBlockReason}`);
+      return;
+    }
+    event.preventDefault();
 
-    for (let pageNumber = 1; pageNumber <= this.pdf.numPages; pageNumber += 1) {
-      const page = await this.pdf.getPage(pageNumber);
-      const base = page.getViewport({scale: 1});
-      const cssScale = Math.min(availableWidth / base.width, 1.75);
-      const cssViewport = page.getViewport({scale: cssScale});
-      const renderViewport = page.getViewport({scale: cssScale * pixelRatio});
-      const pageEl = this.scoreContainer.createDiv({cls: "betterscore-page"});
-      pageEl.style.width = `${cssViewport.width}px`;
-      pageEl.style.height = `${cssViewport.height}px`;
-      pageEl.dataset.page = String(pageNumber);
+    const point = surface.pointFromEvent(event);
+    if (this.tool === "text") {
+      this.openTextInput(pageNumber, point);
+      return;
+    }
 
-      const pdfCanvas = pageEl.createEl("canvas", {cls: "betterscore-pdf-canvas"});
-      pdfCanvas.width = Math.ceil(renderViewport.width);
-      pdfCanvas.height = Math.ceil(renderViewport.height);
-      pdfCanvas.style.width = `${cssViewport.width}px`;
-      pdfCanvas.style.height = `${cssViewport.height}px`;
-      const pdfContext = pdfCanvas.getContext("2d");
-      if (!pdfContext) throw new Error("Canvas is not available");
+    surface.capturePointer(event.pointerId);
+    if (this.tool === "eraser") {
+      this.pushUndoState();
+      this.activePage = pageNumber;
+      this.eraseAt(pageNumber, point);
+      return;
+    }
 
-      const overlay = pageEl.createEl("canvas", {cls: "betterscore-ink-canvas"});
-      overlay.width = Math.ceil(cssViewport.width * pixelRatio);
-      overlay.height = Math.ceil(cssViewport.height * pixelRatio);
-      overlay.style.width = `${cssViewport.width}px`;
-      overlay.style.height = `${cssViewport.height}px`;
-      const context = overlay.getContext("2d");
-      if (!context) throw new Error("Canvas is not available");
-      context.scale(pixelRatio, pixelRatio);
+    this.pushUndoState();
+    this.activePage = pageNumber;
+    this.activeStroke = {
+      id: crypto.randomUUID(),
+      tool: this.tool,
+      color: this.tool === "highlighter" ? "#ffd60a" : "#e53935",
+      opacity: this.tool === "highlighter" ? 0.2 : 0.92,
+      width: this.tool === "highlighter" ? this.getHighlighterWidth() : 0.0045,
+      points: [point]
+    };
+    this.page(pageNumber).strokes.push(this.activeStroke);
+    this.drawPage(pageNumber);
+  }
 
-      const surface = {pageNumber, overlay, context};
-      this.surfaces.set(pageNumber, surface);
-      this.installPointerHandlers(surface);
-      this.drawPage(pageNumber);
-      await page.render({canvasContext: pdfContext, viewport: renderViewport}).promise;
+  private handlePointerMove(surface: PageSurface, event: PointerEvent): void {
+    if (!surface.hasPointerCapture(event.pointerId)) return;
+    const point = surface.pointFromEvent(event);
+    if (this.tool === "eraser") {
+      this.eraseAt(surface.pageNumber, point);
+    } else if (this.activeStroke && this.activePage === surface.pageNumber) {
+      const previous = this.activeStroke.points[this.activeStroke.points.length - 1];
+      if (!previous || shouldRecordSample(previous, point)) {
+        this.activeStroke.points.push(point);
+        this.drawPage(surface.pageNumber);
+      }
     }
   }
 
-  private installPointerHandlers(surface: PageSurface): void {
-    const {overlay, pageNumber} = surface;
-    overlay.addEventListener("pointerdown", (event) => {
-      // A finger navigates the score; Pencil/stylus and mouse create annotations.
-      if (event.pointerType === "touch" && this.tool !== "text") return;
-      if (event.button !== 0 && event.pointerType === "mouse") return;
-      if (!this.annotationsWritable) {
-        new Notice(`BetterScore: ${this.annotationBlockReason}`);
-        return;
-      }
-      event.preventDefault();
-
-      const point = this.pointFromEvent(event, overlay);
-      if (this.tool === "text") {
-        this.openTextInput(pageNumber, point);
-        return;
-      }
-
-      overlay.setPointerCapture(event.pointerId);
-
-      if (this.tool === "eraser") {
-        this.pushUndoState();
-        this.activePage = pageNumber;
-        this.eraseAt(pageNumber, point);
-        return;
-      }
-
-      this.pushUndoState();
-      this.activePage = pageNumber;
-      this.activeStroke = {
-        id: crypto.randomUUID(),
-        tool: this.tool,
-        color: this.tool === "highlighter" ? "#ffd60a" : "#e53935",
-        opacity: this.tool === "highlighter" ? 0.2 : 0.92,
-        width: this.tool === "highlighter" ? this.getHighlighterWidth() : 0.0045,
-        points: [point]
-      };
-      this.page(pageNumber).strokes.push(this.activeStroke);
-      this.drawPage(pageNumber);
-    });
-
-    overlay.addEventListener("pointermove", (event) => {
-      if (!overlay.hasPointerCapture(event.pointerId)) return;
-      const point = this.pointFromEvent(event, overlay);
-      if (this.tool === "eraser") {
-        this.eraseAt(pageNumber, point);
-      } else if (this.activeStroke && this.activePage === pageNumber) {
+  private handlePointerEnd(surface: PageSurface, event: PointerEvent): void {
+    surface.releasePointer(event.pointerId);
+    if (this.activeStroke) {
+      if (event.type === "pointerup") {
+        const finalPoint = surface.pointFromEvent(event);
         const previous = this.activeStroke.points[this.activeStroke.points.length - 1];
-        if (!previous || shouldRecordSample(previous, point)) {
-          this.activeStroke.points.push(point);
-          this.drawPage(pageNumber);
+        if (!previous || shouldRecordSample(previous, finalPoint)) {
+          this.activeStroke.points.push(finalPoint);
         }
       }
-    });
-
-    const finish = (event: PointerEvent): void => {
-      if (overlay.hasPointerCapture(event.pointerId)) {
-        overlay.releasePointerCapture(event.pointerId);
-      }
-      if (this.activeStroke) {
-        if (event.type === "pointerup") {
-          const finalPoint = this.pointFromEvent(event, overlay);
-          const previous = this.activeStroke.points[this.activeStroke.points.length - 1];
-          if (!previous || shouldRecordSample(previous, finalPoint)) {
-            this.activeStroke.points.push(finalPoint);
-          }
-        }
-        this.activeStroke.points = simplifyStrokePoints(
-          this.activeStroke.points,
-          this.activeStroke.tool
-        );
-        this.drawPage(pageNumber);
-        this.scheduleSave();
-      }
-      this.activeStroke = null;
-      this.activePage = null;
-    };
-    overlay.addEventListener("pointerup", finish);
-    overlay.addEventListener("pointercancel", finish);
-  }
-
-  private pointFromEvent(event: PointerEvent, canvas: HTMLCanvasElement): StrokePoint {
-    const bounds = canvas.getBoundingClientRect();
-    return {
-      x: clamp((event.clientX - bounds.left) / bounds.width),
-      y: clamp((event.clientY - bounds.top) / bounds.height),
-      pressure: event.pressure > 0 ? event.pressure : 0.5
-    };
+      this.activeStroke.points = simplifyStrokePoints(
+        this.activeStroke.points,
+        this.activeStroke.tool
+      );
+      this.drawPage(surface.pageNumber);
+      this.scheduleSave();
+    }
+    this.activeStroke = null;
+    this.activePage = null;
   }
 
   private eraseAt(pageNumber: number, point: StrokePoint): void {
@@ -460,17 +388,22 @@ export class BetterScoreView extends FileView {
   }
 
   private drawPage(pageNumber: number): void {
-    const surface = this.surfaces.get(pageNumber);
+    const surface = this.surfaceManager?.getSurface(pageNumber);
     if (!surface) return;
-    const bounds = surface.overlay.getBoundingClientRect();
-    const context = surface.context;
-    context.clearRect(0, 0, bounds.width, bounds.height);
-    for (const stroke of this.page(pageNumber).strokes) {
-      drawStroke(context, stroke, bounds.width, bounds.height);
-    }
-    for (const text of this.page(pageNumber).texts) {
-      drawTextAnnotation(context, text, bounds.width, bounds.height);
-    }
+    this.drawSurface(surface);
+  }
+
+  private drawSurface(surface: PageSurface): void {
+    const annotations = this.annotations.pages[String(surface.pageNumber)]
+      ?? {strokes: [], texts: []};
+    surface.drawAnnotations((context, width, height) => {
+      for (const stroke of annotations.strokes) {
+        drawStroke(context, stroke, width, height);
+      }
+      for (const text of annotations.texts) {
+        drawTextAnnotation(context, text, width, height);
+      }
+    });
   }
 
   private page(pageNumber: number): PageAnnotations {
@@ -548,7 +481,9 @@ export class BetterScoreView extends FileView {
   }
 
   private redrawAll(): void {
-    for (const pageNumber of this.surfaces.keys()) this.drawPage(pageNumber);
+    for (const pageNumber of this.surfaceManager?.getMountedPageNumbers() ?? []) {
+      this.drawPage(pageNumber);
+    }
   }
 
   private scheduleSave(): void {
@@ -577,6 +512,8 @@ export class BetterScoreView extends FileView {
   }
 
   private async destroyPdf(): Promise<void> {
+    this.surfaceManager?.dispose();
+    this.surfaceManager = null;
     if (!this.pdf) return;
     await this.pdf.destroy();
     this.pdf = null;
@@ -693,10 +630,6 @@ class TextAnnotationModal extends Modal {
   onClose(): void {
     this.contentEl.empty();
   }
-}
-
-function clamp(value: number): number {
-  return Math.max(0, Math.min(1, value));
 }
 
 function messageOf(error: unknown): string {
