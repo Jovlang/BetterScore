@@ -37,6 +37,26 @@ export default class BetterScorePlugin extends Plugin {
       name: "Open score switcher",
       callback: () => this.openScoreSwitcher()
     });
+    this.addCommand({
+      id: "show-render-statistics",
+      name: "Show render statistics",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BetterScoreView);
+        const stats = view?.getRenderStats();
+        if (!stats) return false;
+        if (!checking) {
+          new Notice(
+            `BetterScore page ${stats.currentPage}/${stats.totalPages} · `
+            + `${stats.mountedSurfaces} surfaces · ${stats.activeCanvases} canvases · `
+            + `${stats.totalCanvasPixels.toLocaleString()} px · `
+            + `${stats.queuedRenders} queued · ${stats.activeRenders} rendering · `
+            + `${stats.cancelledRenders} cancelled`,
+            8000
+          );
+        }
+        return true;
+      }
+    });
     this.addRibbonIcon("music-2", "Open BetterScore score switcher", () => {
       this.openScoreSwitcher();
     });

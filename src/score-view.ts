@@ -15,6 +15,7 @@ import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
 import {SaveCoordinator} from "./save-coordinator";
 import {PageSurface} from "./page-surface";
 import {PageSurfaceManager} from "./page-surface-manager";
+import type {PageSurfaceStats} from "./page-surface-manager";
 import type {PdfDocument} from "./pdf-types";
 import {
   AnnotationDocument,
@@ -55,6 +56,7 @@ export class BetterScoreView extends FileView {
   private readonly saveCoordinator: SaveCoordinator<PreparedAnnotationSave>;
   private activeStroke: Stroke | null = null;
   private activePage: number | null = null;
+  private currentPage = 1;
   private toolbar: HTMLElement | null = null;
   private scoreContainer: HTMLElement | null = null;
   private undoButton: HTMLButtonElement | null = null;
@@ -94,6 +96,10 @@ export class BetterScoreView extends FileView {
     return "music-2";
   }
 
+  getRenderStats(): PageSurfaceStats | null {
+    return this.surfaceManager?.getStats() ?? null;
+  }
+
   async onLoadFile(file: TFile): Promise<void> {
     await super.onLoadFile(file);
     await this.openScore(file);
@@ -113,6 +119,7 @@ export class BetterScoreView extends FileView {
   private async openScore(file: TFile): Promise<void> {
     this.undoStack = [];
     this.redoStack = [];
+    this.currentPage = 1;
     this.annotationsWritable = true;
     this.annotationBlockReason = "";
     this.contentEl.empty();
@@ -141,9 +148,15 @@ export class BetterScoreView extends FileView {
         onPointerDown: (surface, event) => this.handlePointerDown(surface, event),
         onPointerMove: (surface, event) => this.handlePointerMove(surface, event),
         onPointerEnd: (surface, event) => this.handlePointerEnd(surface, event),
-        drawAnnotations: (surface) => this.drawSurface(surface)
+        drawAnnotations: (surface) => this.drawSurface(surface),
+        onCurrentPageChange: (pageNumber) => {
+          this.currentPage = pageNumber;
+        },
+        onRenderError: (pageNumber, error) => {
+          new Notice(`BetterScore could not render page ${pageNumber}: ${messageOf(error)}`);
+        }
       });
-      await this.surfaceManager.renderAll();
+      await this.surfaceManager.initializeContinuous();
     } catch (error) {
       this.surfaceManager?.dispose();
       this.surfaceManager = null;

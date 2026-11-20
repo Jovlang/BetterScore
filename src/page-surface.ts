@@ -14,7 +14,6 @@ export interface PageSurfaceGeometry {
 }
 
 export class PageSurface {
-  readonly element: HTMLElement;
   readonly overlay: HTMLCanvasElement;
   readonly annotationContext: CanvasRenderingContext2D;
   readonly cssWidth: number;
@@ -27,7 +26,7 @@ export class PageSurface {
   private destroyed = false;
 
   constructor(
-    container: HTMLElement,
+    readonly element: HTMLElement,
     readonly pageNumber: number,
     private readonly page: PdfPage,
     private readonly geometry: PageSurfaceGeometry,
@@ -35,7 +34,8 @@ export class PageSurface {
   ) {
     this.cssWidth = geometry.cssViewport.width;
     this.cssHeight = geometry.cssViewport.height;
-    this.element = container.createDiv({cls: "betterscore-page"});
+    this.element.empty();
+    this.element.addClass("is-mounted");
     this.element.style.width = `${this.cssWidth}px`;
     this.element.style.height = `${this.cssHeight}px`;
     this.element.dataset.page = String(pageNumber);
@@ -83,6 +83,10 @@ export class PageSurface {
     }
   }
 
+  isPdfRendered(): boolean {
+    return this.rendered;
+  }
+
   drawAnnotations(draw: (context: CanvasRenderingContext2D, width: number, height: number) => void): void {
     if (this.destroyed) return;
     this.annotationContext.clearRect(0, 0, this.cssWidth, this.cssHeight);
@@ -112,10 +116,11 @@ export class PageSurface {
     }
   }
 
-  destroy(): void {
-    if (this.destroyed) return;
+  destroy(): boolean {
+    if (this.destroyed) return false;
     this.destroyed = true;
-    this.renderTask?.cancel?.();
+    const activeTask = this.renderTask;
+    activeTask?.cancel?.();
     this.renderTask = null;
     this.overlay.removeEventListener("pointerdown", this.handlePointerDown);
     this.overlay.removeEventListener("pointermove", this.handlePointerMove);
@@ -126,8 +131,20 @@ export class PageSurface {
     this.pdfCanvas.height = 0;
     this.overlay.width = 0;
     this.overlay.height = 0;
-    this.page.cleanup?.();
-    this.element.remove();
+    this.pdfCanvas.remove();
+    this.overlay.remove();
+    this.element.removeClass("is-mounted");
+    if (activeTask) {
+      void activeTask.promise.catch(() => undefined).finally(() => this.page.cleanup?.());
+    } else {
+      this.page.cleanup?.();
+    }
+    return activeTask !== null;
+  }
+
+  getCanvasPixelArea(): number {
+    return this.pdfCanvas.width * this.pdfCanvas.height
+      + this.overlay.width * this.overlay.height;
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {

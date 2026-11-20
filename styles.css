@@ -79,8 +79,14 @@
 .betterscore-page {
   background: white;
   box-shadow: 0 3px 18px rgb(0 0 0 / 20%);
+  contain: layout paint;
   flex: 0 0 auto;
+  overflow: hidden;
   position: relative;
+}
+
+.betterscore-page-placeholder:not(.is-mounted) {
+  background: color-mix(in srgb, white 96%, var(--background-secondary));
 }
 
 .betterscore-pdf-canvas,

@@ -7,6 +7,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 ## Current features
 
 - Continuous vertical PDF reading
+- Viewport-based lazy page rendering with bounded canvas memory
 - Mouse, stylus, and Apple Pencil annotation input
 - Pressure-sensitive pen
 - Semi-transparent yellow marker with a persistent right-click width menu
@@ -43,7 +44,9 @@ npm run verify
 
 ## Rendering architecture
 
-`PageSurface` owns the DOM, PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one page. `PageSurfaceManager` owns mounted surfaces, page geometry, deduplicated mount operations, rendering, eviction, and disposal. The score view coordinates annotations and tools without constructing PDF canvases directly. This boundary is the foundation for viewport-based lazy rendering and alternate page layouts.
+`PageSurface` owns the PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one mounted page. `PageSurfaceManager` creates lightweight placeholders for every page, observes a generous viewport margin, limits concurrent renders, evicts distant canvases, tracks the viewport-centered current page, and exposes render-memory statistics. The score view coordinates annotations and tools without constructing PDF canvases directly.
+
+Run **BetterScore: Show render statistics** from the command palette while a score is active to inspect mounted surfaces, canvases, pixel area, render queues, cancellations, and the viewport-centered page.
 
 ## Annotation format
 
