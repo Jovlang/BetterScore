@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   calculatePagedRenderScales,
   calculateRenderScales,
+  capRenderScales,
+  clampZoom,
   shouldFullyCachePagedDocument
 } from "../src/page-surface-manager";
 
@@ -36,4 +38,21 @@ test("full paged caching requires a small source and a safe canvas budget", () =
     ...safe,
     estimatedCanvasBytes: 193 * 1024 * 1024
   }), false);
+});
+
+test("zoom is rounded and clamped to safe renderer bounds", () => {
+  assert.equal(clampZoom(1.234), 1.23);
+  assert.equal(clampZoom(0.1), 0.5);
+  assert.equal(clampZoom(5), 3);
+  assert.equal(clampZoom(Number.NaN), 1);
+});
+
+test("large zoom keeps CSS size but bounds both canvas backing stores", () => {
+  const scales = capRenderScales(
+    {width: 1000, height: 2000},
+    {cssScale: 3, renderScale: 6, pixelRatio: 2}
+  );
+  assert.equal(scales.cssScale, 3);
+  assert.ok(scales.pixelRatio < 1);
+  assert.equal(scales.renderScale * 2000, 4096);
 });

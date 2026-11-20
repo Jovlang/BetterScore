@@ -13,6 +13,9 @@ const MAX_CONCURRENT_RENDERS = 2;
 const MAX_FULL_CACHE_PAGES = 24;
 const MAX_FULL_CACHE_SOURCE_BYTES = 48 * 1024 * 1024;
 const MAX_FULL_CACHE_CANVAS_BYTES = 192 * 1024 * 1024;
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 3;
+const MAX_CANVAS_DIMENSION = 4096;
 
 export type PageCacheStrategy = "continuous" | "windowed" | "full";
 
@@ -33,6 +36,7 @@ export interface PageSurfaceStats {
   cancelledRenders: number;
   cacheStrategy: PageCacheStrategy;
   desiredPages: number;
+  zoom: number;
 }
 
 export interface PageSurfaceManagerCallbacks extends PageSurfacePointerHandlers {
@@ -58,6 +62,7 @@ export class PageSurfaceManager {
   private activeRenders = 0;
   private cancelledRenders = 0;
   private currentPage = 1;
+  private zoom = 1;
   private cacheStrategy: PageCacheStrategy = "continuous";
   private layoutState: ViewerState = createViewerState();
   private layoutGeneration = 0;
@@ -96,6 +101,7 @@ export class PageSurfaceManager {
     this.currentPage = this.layoutState.currentPage;
     this.resetLayout();
     this.container.dataset.viewMode = state.viewMode;
+    this.updateZoomClass();
 
     const visiblePages = pagesForLayout(this.layoutState, this.pdf.numPages);
     const pages = this.renderWindowForState(this.layoutState);
@@ -174,6 +180,23 @@ export class PageSurfaceManager {
     return this.currentPage;
   }
 
+  getZoom(): number {
+    return this.zoom;
+  }
+
+  async setZoom(zoom: number): Promise<number> {
+    const normalized = clampZoom(zoom);
+    if (normalized === this.zoom) return this.zoom;
+    this.zoom = normalized;
+    this.updateZoomClass();
+    await this.setLayout(this.layoutState, true);
+    return this.zoom;
+  }
+
+  async refreshLayout(): Promise<boolean> {
+    return this.setLayout(this.layoutState, true);
+  }
+
   scrollToPage(pageNumber: number, behavior: ScrollBehavior = "auto"): boolean {
     const slot = this.slots.get(pageNumber);
     if (!slot) return false;
@@ -202,7 +225,8 @@ export class PageSurfaceManager {
       activeRenders: this.activeRenders,
       cancelledRenders: this.cancelledRenders,
       cacheStrategy: this.cacheStrategy,
-      desiredPages: this.desiredPages.size
+      desiredPages: this.desiredPages.size,
+      zoom: this.zoom
     };
   }
 
@@ -357,7 +381,13 @@ export class PageSurfaceManager {
   private scalesForPage(baseViewport: PdfViewport, mode: ViewMode): RenderScales {
     const pixelRatio = this.pixelRatio();
     if (mode === "continuous") {
-      return calculateRenderScales(baseViewport, this.availableContinuousWidth(), pixelRatio);
+      return capRenderScales(
+        baseViewport,
+        applyZoom(
+          calculateRenderScales(baseViewport, this.availableContinuousWidth(), pixelRatio),
+          this.zoom
+        )
+      );
     }
     const columns = mode === "spread" ? 2 : 1;
     const padding = this.container.clientWidth <= 600 ? 16 : 32;
@@ -365,12 +395,23 @@ export class PageSurfaceManager {
     const totalWidth = Math.max(160, this.container.clientWidth - padding);
     const availableWidth = columns === 2 ? Math.max(80, (totalWidth - gap) / 2) : totalWidth;
     const availableHeight = Math.max(160, this.container.clientHeight - padding);
-    return calculatePagedRenderScales(
+    return capRenderScales(
       baseViewport,
-      availableWidth,
-      availableHeight,
-      pixelRatio
+      applyZoom(
+        calculatePagedRenderScales(
+          baseViewport,
+          availableWidth,
+          availableHeight,
+          pixelRatio
+        ),
+        this.zoom
+      )
     );
+  }
+
+  private updateZoomClass(): void {
+    this.container.toggleClass("is-zoomed", this.zoom > 1);
+    this.container.dataset.zoom = String(this.zoom);
   }
 
   private renderWindowForState(state: ViewerState): number[] {
@@ -598,4 +639,32 @@ export function shouldFullyCachePagedDocument(estimate: FullCacheEstimate): bool
     && estimate.pageCount <= MAX_FULL_CACHE_PAGES
     && estimate.sourceSizeBytes <= MAX_FULL_CACHE_SOURCE_BYTES
     && estimate.estimatedCanvasBytes <= MAX_FULL_CACHE_CANVAS_BYTES;
+}
+
+export function clampZoom(zoom: number): number {
+  if (!Number.isFinite(zoom)) return 1;
+  return Math.round(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom)) * 100) / 100;
+}
+
+export function capRenderScales(
+  baseViewport: PdfViewport,
+  scales: RenderScales,
+  maxDimension = MAX_CANVAS_DIMENSION
+): RenderScales {
+  const largestCssDimension = Math.max(baseViewport.width, baseViewport.height) * scales.cssScale;
+  if (largestCssDimension <= 0) return scales;
+  const pixelRatio = Math.min(scales.pixelRatio, maxDimension / largestCssDimension);
+  return {
+    cssScale: scales.cssScale,
+    renderScale: scales.cssScale * pixelRatio,
+    pixelRatio
+  };
+}
+
+function applyZoom(scales: RenderScales, zoom: number): RenderScales {
+  return {
+    cssScale: scales.cssScale * zoom,
+    renderScale: scales.renderScale * zoom,
+    pixelRatio: scales.pixelRatio
+  };
 }

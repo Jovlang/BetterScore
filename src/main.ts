@@ -52,6 +52,7 @@ export default class BetterScorePlugin extends Plugin {
             `BetterScore page ${stats.currentPage}/${stats.totalPages} · `
             + `${stats.mountedSurfaces} surfaces · ${stats.activeCanvases} canvases · `
             + `${stats.totalCanvasPixels.toLocaleString()} px · `
+            + `${Math.round(stats.zoom * 100)}% zoom · `
             + `${stats.queuedRenders} queued · ${stats.activeRenders} rendering · `
             + `${stats.cancelledRenders} cancelled · ${stats.cacheStrategy} cache `
             + `(${stats.desiredPages} pages)`,
@@ -120,6 +121,34 @@ export default class BetterScorePlugin extends Plugin {
         return true;
       }
     });
+    this.addCommand({
+      id: "toggle-thumbnails",
+      name: "Toggle thumbnails",
+      checkCallback: (checking) => this.withActiveScore(checking, (view) => view.toggleThumbnails())
+    });
+    this.addCommand({
+      id: "zoom-in",
+      name: "Zoom in",
+      checkCallback: (checking) => this.withActiveScore(checking, (view) => view.zoomIn())
+    });
+    this.addCommand({
+      id: "zoom-out",
+      name: "Zoom out",
+      checkCallback: (checking) => this.withActiveScore(checking, (view) => view.zoomOut())
+    });
+    this.addCommand({
+      id: "reset-zoom",
+      name: "Reset zoom",
+      checkCallback: (checking) => this.withActiveScore(checking, (view) => view.resetZoom())
+    });
+    this.addCommand({
+      id: "export-flattened-pdf",
+      name: "Export flattened annotated PDF",
+      checkCallback: (checking) => this.withActiveScore(
+        checking,
+        (view) => view.exportFlattenedPdf()
+      )
+    });
     this.addRibbonIcon("music-2", "Open BetterScore score switcher", () => {
       this.openScoreSwitcher();
     });
@@ -179,6 +208,13 @@ export default class BetterScorePlugin extends Plugin {
   private async setFingerDrawingEnabled(enabled: boolean): Promise<void> {
     this.pluginSettings = normalizeSettings({...this.pluginSettings, fingerDrawingEnabled: enabled});
     await this.saveData(this.pluginSettings);
+  }
+
+  private withActiveScore(checking: boolean, action: (view: BetterScoreView) => void): boolean {
+    const view = this.app.workspace.getActiveViewOfType(BetterScoreView);
+    if (!view) return false;
+    if (!checking) action(view);
+    return true;
   }
 
   private async openScore(file: TFile, leaf?: WorkspaceLeaf): Promise<void> {

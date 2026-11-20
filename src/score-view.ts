@@ -10,6 +10,7 @@ import {
   setIcon
 } from "obsidian";
 import {AnnotationStore, PreparedAnnotationSave} from "./annotation-store";
+import {drawPageAnnotations} from "./annotation-renderer";
 import {precisionErase, strokeIntersectsEraser} from "./eraser";
 import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
 import {SaveCoordinator} from "./save-coordinator";
@@ -18,7 +19,9 @@ import {pageNavigationAction, routePointerInput} from "./input-router";
 import {PageSurface} from "./page-surface";
 import {PageSurfaceManager} from "./page-surface-manager";
 import type {PageSurfaceStats} from "./page-surface-manager";
+import {createFlattenedPdf, flattenedPdfPath} from "./pdf-export";
 import type {PdfDocument} from "./pdf-types";
+import {ThumbnailStrip} from "./thumbnail-strip";
 import {createViewerState} from "./viewer-layout";
 import type {SpreadOffset, ViewerState, ViewMode} from "./viewer-layout";
 import {
@@ -28,7 +31,6 @@ import {
   SourceFingerprintMismatchError,
   Stroke,
   StrokePoint,
-  TextAnnotation,
   createAnnotationDocument
 } from "./model";
 import {createSourceIdentity} from "./source-identity";
@@ -71,12 +73,20 @@ export class BetterScoreView extends FileView {
   private activeStroke: Stroke | null = null;
   private activePage: number | null = null;
   private toolbar: HTMLElement | null = null;
+  private viewerBody: HTMLElement | null = null;
+  private thumbnailPane: HTMLElement | null = null;
   private scoreContainer: HTMLElement | null = null;
+  private thumbnailStrip: ThumbnailStrip | null = null;
+  private thumbnailsOpen = false;
+  private exportingPdf = false;
   private undoButton: HTMLButtonElement | null = null;
   private redoButton: HTMLButtonElement | null = null;
   private markerButton: HTMLButtonElement | null = null;
   private eraserButton: HTMLButtonElement | null = null;
   private fingerDrawingButton: HTMLButtonElement | null = null;
+  private thumbnailButton: HTMLButtonElement | null = null;
+  private zoomResetButton: HTMLButtonElement | null = null;
+  private exportButton: HTMLButtonElement | null = null;
   private spreadModeButton: HTMLButtonElement | null = null;
   private readonly viewModeButtons = new Map<ViewMode, HTMLButtonElement>();
 
@@ -148,6 +158,33 @@ export class BetterScoreView extends FileView {
     });
   }
 
+  toggleThumbnails(): void {
+    this.thumbnailsOpen = !this.thumbnailsOpen;
+    this.thumbnailPane?.toggleClass("is-open", this.thumbnailsOpen);
+    this.thumbnailButton?.toggleClass("is-active", this.thumbnailsOpen);
+    if (this.thumbnailsOpen) this.thumbnailStrip?.activate();
+    const manager = this.surfaceManager;
+    window.requestAnimationFrame(() => {
+      if (manager === this.surfaceManager) void manager?.refreshLayout();
+    });
+  }
+
+  zoomIn(): void {
+    this.changeZoom(0.25);
+  }
+
+  zoomOut(): void {
+    this.changeZoom(-0.25);
+  }
+
+  resetZoom(): void {
+    this.setZoom(1);
+  }
+
+  exportFlattenedPdf(): void {
+    void this.exportFlattenedPdfNow();
+  }
+
   async onLoadFile(file: TFile): Promise<void> {
     await super.onLoadFile(file);
     await this.openScore(file);
@@ -170,12 +207,16 @@ export class BetterScoreView extends FileView {
     this.navigationController = null;
     this.renderedViewMode = null;
     this.navigationGesture = null;
+    this.thumbnailsOpen = false;
+    this.exportingPdf = false;
     this.annotationsWritable = true;
     this.annotationBlockReason = "";
     this.contentEl.empty();
     this.contentEl.addClass("betterscore-view");
     this.renderToolbar();
-    this.scoreContainer = this.contentEl.createDiv({cls: "betterscore-pages"});
+    this.viewerBody = this.contentEl.createDiv({cls: "betterscore-viewer-body"});
+    this.thumbnailPane = this.viewerBody.createDiv({cls: "betterscore-thumbnail-pane"});
+    this.scoreContainer = this.viewerBody.createDiv({cls: "betterscore-pages"});
     this.scoreContainer.createDiv({cls: "betterscore-loading", text: "Loading score…"});
 
     try {
@@ -212,11 +253,21 @@ export class BetterScoreView extends FileView {
           new Notice(`BetterScore could not render page ${pageNumber}: ${messageOf(error)}`);
         }
       }, source.size);
+      this.thumbnailStrip = new ThumbnailStrip(
+        this.thumbnailPane,
+        this.pdf,
+        (pageNumber) => this.navigationController?.goToPage(pageNumber),
+        (pageNumber, error) => {
+          console.warn(`BetterScore thumbnail ${pageNumber} failed`, error);
+        }
+      );
       const initialState = this.navigationController.getState();
       if (await this.surfaceManager.setLayout(initialState)) {
         this.renderedViewMode = initialState.viewMode;
       }
     } catch (error) {
+      this.thumbnailStrip?.dispose();
+      this.thumbnailStrip = null;
       this.surfaceManager?.dispose();
       this.surfaceManager = null;
       this.scoreContainer.empty();
@@ -239,6 +290,15 @@ export class BetterScoreView extends FileView {
     });
     this.addActionButton("chevron-left", "Previous", "←", () => this.navigatePrevious());
     this.addActionButton("chevron-right", "Next", "→", () => this.navigateNext());
+    this.thumbnailButton = this.addActionButton("panel-left", "Thumbnails", "", () => {
+      this.toggleThumbnails();
+    });
+    this.thumbnailButton?.addClass("betterscore-thumbnail-toggle");
+    this.addActionButton("zoom-out", "Zoom out", "Ctrl/⌘ -", () => this.zoomOut());
+    this.zoomResetButton = this.addActionButton("scan", "Reset zoom", "Ctrl/⌘ 0", () => {
+      this.resetZoom();
+    });
+    this.addActionButton("zoom-in", "Zoom in", "Ctrl/⌘ +", () => this.zoomIn());
     this.toolbar.createDiv({cls: "betterscore-toolbar-divider"});
     this.addToolButton("pencil", "Pen", "pen");
     this.markerButton = this.addToolButton("highlighter", "Yellow marker", "highlighter");
@@ -268,10 +328,14 @@ export class BetterScoreView extends FileView {
       "Ctrl/⌘ Shift Z",
       () => this.redo()
     );
+    this.exportButton = this.addActionButton("download", "Export flattened PDF", "", () => {
+      this.exportFlattenedPdf();
+    });
     this.updateToolButtons();
     this.updateHistoryButtons();
     this.updateViewModeButtons();
     this.updateFingerDrawingButton();
+    this.updateZoomButton();
   }
 
   private updateFingerDrawingButton(): void {
@@ -289,6 +353,56 @@ export class BetterScoreView extends FileView {
         ? "Finger drawing: on · Finger scrolling and page turns are disabled"
         : "Finger drawing: off · Tap to draw with a finger"
     );
+  }
+
+  private changeZoom(delta: number): void {
+    const current = this.surfaceManager?.getZoom() ?? 1;
+    this.setZoom(current + delta);
+  }
+
+  private setZoom(zoom: number): void {
+    const manager = this.surfaceManager;
+    if (!manager) return;
+    void manager.setZoom(zoom).then(() => {
+      if (manager === this.surfaceManager) this.updateZoomButton();
+    }).catch((error: unknown) => {
+      new Notice(`BetterScore could not zoom: ${messageOf(error)}`);
+    });
+  }
+
+  private updateZoomButton(): void {
+    const percent = Math.round((this.surfaceManager?.getZoom() ?? 1) * 100);
+    this.zoomResetButton?.setAttribute("aria-label", `Reset zoom. Current zoom: ${percent}%`);
+    this.zoomResetButton?.setAttribute("title", `Zoom: ${percent}% · Reset`);
+  }
+
+  private async exportFlattenedPdfNow(): Promise<void> {
+    if (!this.file || this.exportingPdf) return;
+    this.exportingPdf = true;
+    if (this.exportButton) this.exportButton.disabled = true;
+    const sourceFile = this.file;
+    const notice = new Notice("BetterScore: Exporting annotated PDF…", 0);
+    try {
+      await this.flushSave();
+      const source = await this.app.vault.readBinary(sourceFile);
+      const bytes = await createFlattenedPdf(source, structuredClone(this.annotations));
+      let copy = 1;
+      let outputPath = flattenedPdfPath(sourceFile.path, copy);
+      while (this.app.vault.getAbstractFileByPath(outputPath)) {
+        copy += 1;
+        outputPath = flattenedPdfPath(sourceFile.path, copy);
+      }
+      const output = Uint8Array.from(bytes).buffer;
+      await this.app.vault.createBinary(outputPath, output);
+      notice.hide();
+      new Notice(`BetterScore exported ${outputPath}`, 8000);
+    } catch (error) {
+      notice.hide();
+      new Notice(`BetterScore export failed: ${messageOf(error)}`, 10000);
+    } finally {
+      this.exportingPdf = false;
+      if (this.exportButton) this.exportButton.disabled = false;
+    }
   }
 
   private addViewModeButton(
@@ -430,9 +544,10 @@ export class BetterScoreView extends FileView {
     shortcut: string,
     action: () => void
   ): HTMLButtonElement | null {
+    const description = shortcut ? `${label} (${shortcut})` : label;
     const button = this.toolbar?.createEl("button", {
       cls: "clickable-icon betterscore-history-action",
-      attr: {"aria-label": `${label} (${shortcut})`, title: `${label} (${shortcut})`}
+      attr: {"aria-label": description, title: description}
     });
     if (!button) return null;
     setIcon(button, icon);
@@ -601,12 +716,7 @@ export class BetterScoreView extends FileView {
     const annotations = this.annotations.pages[String(surface.pageNumber)]
       ?? {strokes: [], texts: []};
     surface.drawAnnotations((context, width, height) => {
-      for (const stroke of annotations.strokes) {
-        drawStroke(context, stroke, width, height);
-      }
-      for (const text of annotations.texts) {
-        drawTextAnnotation(context, text, width, height);
-      }
+      drawPageAnnotations(context, annotations, width, height);
     });
   }
 
@@ -670,7 +780,9 @@ export class BetterScoreView extends FileView {
   private handleKeyboardShortcut(event: KeyboardEvent): void {
     if (this.handleHistoryShortcut(event)) return;
     if (this.app.workspace.getActiveViewOfType(BetterScoreView) !== this) return;
-    if (isTextInput(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (isTextInput(event.target)) return;
+    if (this.handleZoomShortcut(event)) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
 
     if (event.key === "ArrowRight" || event.key === "PageDown") {
       event.preventDefault();
@@ -686,6 +798,27 @@ export class BetterScoreView extends FileView {
       const pageCount = this.pdf?.numPages ?? 1;
       this.navigationController?.goToPage(pageCount);
     }
+  }
+
+  private handleZoomShortcut(event: KeyboardEvent): boolean {
+    const modifier = event.metaKey || event.ctrlKey;
+    if (!modifier || event.altKey) return false;
+    if (event.key === "+" || event.key === "=") {
+      event.preventDefault();
+      this.zoomIn();
+      return true;
+    }
+    if (event.key === "-") {
+      event.preventDefault();
+      this.zoomOut();
+      return true;
+    }
+    if (event.key === "0") {
+      event.preventDefault();
+      this.resetZoom();
+      return true;
+    }
+    return false;
   }
 
   private handleHistoryShortcut(event: KeyboardEvent): boolean {
@@ -712,6 +845,7 @@ export class BetterScoreView extends FileView {
 
   private handleNavigationChange(change: NavigationChange): void {
     this.updateViewModeButtons();
+    this.thumbnailStrip?.setCurrentPage(change.state.currentPage, this.thumbnailsOpen);
     if (this.annotations.settings.spreadOffset !== change.state.spreadOffset) {
       this.annotations.settings.spreadOffset = change.state.spreadOffset;
       this.scheduleSave();
@@ -771,6 +905,8 @@ export class BetterScoreView extends FileView {
   }
 
   private async destroyPdf(): Promise<void> {
+    this.thumbnailStrip?.dispose();
+    this.thumbnailStrip = null;
     this.surfaceManager?.dispose();
     this.surfaceManager = null;
     this.renderedViewMode = null;
@@ -780,75 +916,6 @@ export class BetterScoreView extends FileView {
     this.pdf = null;
     this.navigationController = null;
   }
-}
-
-function drawStroke(
-  context: CanvasRenderingContext2D,
-  stroke: Stroke,
-  width: number,
-  height: number
-): void {
-  if (stroke.points.length === 0) return;
-  context.save();
-  context.strokeStyle = stroke.color;
-  context.fillStyle = stroke.color;
-  context.globalAlpha = stroke.opacity;
-  context.globalCompositeOperation = "source-over";
-  context.lineCap = "round";
-  context.lineJoin = "round";
-
-  const first = stroke.points[0];
-  if (!first) return;
-  if (stroke.points.length === 1) {
-    context.beginPath();
-    context.arc(first.x * width, first.y * height, stroke.width * width * 0.5, 0, Math.PI * 2);
-    context.fill();
-  } else if (stroke.tool === "highlighter") {
-    // Paint the whole gesture once. Painting each mouse segment separately
-    // makes translucent round caps overlap and produces an unexpectedly dark line.
-    context.lineWidth = stroke.width * width;
-    context.beginPath();
-    context.moveTo(first.x * width, first.y * height);
-    for (const point of stroke.points.slice(1)) {
-      context.lineTo(point.x * width, point.y * height);
-    }
-    context.stroke();
-  } else {
-    for (let index = 1; index < stroke.points.length; index += 1) {
-      const previous = stroke.points[index - 1];
-      const point = stroke.points[index];
-      if (!previous || !point) continue;
-      const pressure = (previous.pressure + point.pressure) / 2;
-      context.lineWidth = stroke.width * width * (0.65 + pressure * 0.7);
-      context.beginPath();
-      context.moveTo(previous.x * width, previous.y * height);
-      context.lineTo(point.x * width, point.y * height);
-      context.stroke();
-    }
-  }
-  context.restore();
-}
-
-function drawTextAnnotation(
-  context: CanvasRenderingContext2D,
-  annotation: TextAnnotation,
-  width: number,
-  height: number
-): void {
-  const fontSize = annotation.fontSize * width;
-  context.save();
-  context.fillStyle = annotation.color;
-  context.globalAlpha = 0.95;
-  context.font = `600 ${fontSize}px sans-serif`;
-  context.textBaseline = "top";
-  annotation.text.split("\n").forEach((line, index) => {
-    context.fillText(
-      line,
-      annotation.x * width,
-      annotation.y * height + index * fontSize * 1.2
-    );
-  });
-  context.restore();
 }
 
 class TextAnnotationModal extends Modal {

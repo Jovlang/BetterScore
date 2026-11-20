@@ -29,6 +29,9 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Persistent per-score spread pairing correction from the Spread button's right-click menu or command palette
 - Bounded neighbor prefetch so paged modes reuse rendered surfaces instead of rerendering every turn
 - Adaptive full-document paged caching for small PDFs within explicit source and canvas-memory budgets
+- Sharp 50–300% zoom with keyboard shortcuts and bounded canvas dimensions
+- A lazy, low-resolution thumbnail strip with current-page tracking
+- Non-destructive flattened PDF export to a new sibling file
 - Desktop and mobile support
 
 BetterScore is currently an early prototype.
@@ -53,7 +56,9 @@ npm run verify
 
 ## Rendering architecture
 
-`PageSurface` owns the PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one mounted page. `PageSurfaceManager` builds continuous, single, and spread layouts from the same cached PDF geometry; continuous mode uses lightweight placeholders, viewport observation, bounded rendering, and distant-canvas eviction. Paged modes mount only the one or two visible surfaces and fit them to both viewport width and height. `NavigationController` owns the shared viewer state and all page transitions, while the score view coordinates annotations, tools, and input adapters without constructing PDF canvases directly.
+`PageSurface` owns the PDF canvas, ink canvas, pointer listeners, render task, and bitmap cleanup for one mounted page. `PageSurfaceManager` builds continuous, single, and spread layouts from the same cached PDF geometry; continuous mode uses lightweight placeholders, viewport observation, bounded rendering, and distant-canvas eviction. Paged modes mount only the one or two visible surfaces and fit them to both viewport width and height. Zoom rebuilds those same surfaces sharply while bounding backing-store dimensions. `ThumbnailStrip` has its own lazy, single-task low-resolution queue. `NavigationController` owns the shared viewer state and all page transitions, while the score view coordinates annotations, tools, and input adapters without constructing PDF canvases directly.
+
+Flattened export preserves the original PDF and writes `Score.annotated.pdf` (or the next available numbered name). It rasterizes only the transparent annotation layer, at up to 2× resolution, and places that layer over each original PDF page with `pdf-lib`.
 
 Run **BetterScore: Show render statistics** from the command palette while a score is active to inspect mounted surfaces, canvases, pixel area, render queues, cancellations, and the viewport-centered page.
 
@@ -72,7 +77,7 @@ The format is versioned and migrations are handled when sidecars are loaded. For
 - [x] Preserve the current page in the shared state when switching viewing modes
 - [x] Advance dual-page spreads by two pages while allowing single-page correction
 - [x] Support toolbar, edge-tap, swipe, and keyboard page turns; pedal input remains later
-- [ ] Add zoom, thumbnails, and flattened PDF export
+- [x] Add zoom, thumbnails, and flattened PDF export
 
 ## License
 
