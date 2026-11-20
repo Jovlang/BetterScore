@@ -269,7 +269,6 @@ export class BetterScoreView extends FileView {
     });
     if (!button) return null;
     setIcon(button, icon);
-    button.createSpan({cls: "betterscore-button-label", text: label});
     button.addEventListener("click", () => this.setViewMode(mode));
     this.viewModeButtons.set(mode, button);
     return button;
@@ -319,14 +318,13 @@ export class BetterScoreView extends FileView {
   ): HTMLButtonElement | null {
     const button = this.toolbar?.createEl("button", {
       cls: "clickable-icon betterscore-tool",
-      attr: {"aria-label": label, "data-tool": tool}
+      attr: {"aria-label": label, "data-tool": tool, title: label}
     });
     if (!button) return null;
     setIcon(button, icon);
     if (tool === "highlighter") {
       button.createSpan({cls: "betterscore-marker-swatch"});
     }
-    button.createSpan({cls: "betterscore-button-label", text: label});
     button.addEventListener("click", () => {
       this.tool = tool;
       this.updateToolButtons();
@@ -360,8 +358,6 @@ export class BetterScoreView extends FileView {
       `Yellow marker · ${label}. Right-click to set width.`
     );
     this.markerButton.setAttribute("title", `Marker width: ${label} · Right-click to change`);
-    const text = this.markerButton.querySelector<HTMLElement>(".betterscore-button-label");
-    if (text) text.textContent = `Yellow marker · ${label}`;
   }
 
   private showEraserModeMenu(event: MouseEvent): void {
@@ -393,8 +389,6 @@ export class BetterScoreView extends FileView {
       `Eraser · ${label}. Right-click to change mode.`
     );
     this.eraserButton.setAttribute("title", `Eraser mode: ${label} · Right-click to change`);
-    const text = this.eraserButton.querySelector<HTMLElement>(".betterscore-button-label");
-    if (text) text.textContent = `Eraser · ${label}`;
   }
 
   private addActionButton(
@@ -409,7 +403,6 @@ export class BetterScoreView extends FileView {
     });
     if (!button) return null;
     setIcon(button, icon);
-    button.createSpan({cls: "betterscore-button-label", text: label});
     button.addEventListener("click", action);
     return button;
   }

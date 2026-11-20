@@ -39,12 +39,6 @@
   margin: 8px 4px;
 }
 
-.betterscore-button-label {
-  font-size: var(--font-ui-small);
-  line-height: 1;
-  white-space: nowrap;
-}
-
 .betterscore-marker-swatch {
   background: rgb(255 214 10 / 55%);
   border: 1px solid rgb(180 140 0 / 55%);
