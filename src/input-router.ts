@@ -16,9 +16,11 @@ export interface PageNavigationGesture {
 /** Keep device policy out of annotation and navigation handlers. */
 export function routePointerInput(
   pointerType: string,
-  viewMode: ViewMode
+  viewMode: ViewMode,
+  fingerDrawingEnabled = false
 ): PointerInputIntent {
   if (pointerType !== "touch") return "annotation";
+  if (fingerDrawingEnabled) return "annotation";
   return viewMode === "continuous" ? "scroll" : "page-navigation";
 }
 

@@ -23,6 +23,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Shared continuous/single/spread viewer state and a mode-aware navigation controller
 - Pure, DOM-independent spread pairing and transition functions
 - Central Pencil, finger, and mouse input routing policy
+- Persistent finger-drawing toggle for touch annotation on iPad
 - Page navigation from arrow keys, Page Up/Down, Home/End, and command-palette actions
 - Finger swipe and edge-tap page turns in single and spread modes
 - Persistent per-score spread pairing correction from the Spread button's right-click menu or command palette

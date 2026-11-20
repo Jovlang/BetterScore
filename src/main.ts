@@ -18,7 +18,9 @@ export default class BetterScorePlugin extends Plugin {
         () => this.pluginSettings.highlighterWidth,
         (width) => this.setHighlighterWidth(width),
         () => this.pluginSettings.eraserMode,
-        (mode) => this.setEraserMode(mode)
+        (mode) => this.setEraserMode(mode),
+        () => this.pluginSettings.fingerDrawingEnabled,
+        (enabled) => this.setFingerDrawingEnabled(enabled)
       )
     );
 
@@ -107,6 +109,16 @@ export default class BetterScorePlugin extends Plugin {
         return true;
       }
     });
+    this.addCommand({
+      id: "toggle-finger-drawing",
+      name: "Toggle finger drawing",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BetterScoreView);
+        if (!view) return false;
+        if (!checking) view.toggleFingerDrawing();
+        return true;
+      }
+    });
     this.addRibbonIcon("music-2", "Open BetterScore score switcher", () => {
       this.openScoreSwitcher();
     });
@@ -160,6 +172,11 @@ export default class BetterScorePlugin extends Plugin {
 
   private async setEraserMode(mode: EraserMode): Promise<void> {
     this.pluginSettings = normalizeSettings({...this.pluginSettings, eraserMode: mode});
+    await this.saveData(this.pluginSettings);
+  }
+
+  private async setFingerDrawingEnabled(enabled: boolean): Promise<void> {
+    this.pluginSettings = normalizeSettings({...this.pluginSettings, fingerDrawingEnabled: enabled});
     await this.saveData(this.pluginSettings);
   }
 

@@ -49,7 +49,8 @@
 }
 
 .betterscore-tool.is-active,
-.betterscore-view-mode.is-active {
+.betterscore-view-mode.is-active,
+.betterscore-finger-drawing.is-active {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
 }
@@ -127,6 +128,11 @@
 
 .betterscore-pages[data-view-mode="single"] .betterscore-ink-canvas,
 .betterscore-pages[data-view-mode="spread"] .betterscore-ink-canvas {
+  touch-action: none;
+}
+
+.betterscore-view.is-finger-drawing .betterscore-pages,
+.betterscore-view.is-finger-drawing .betterscore-ink-canvas {
   touch-action: none;
 }
 

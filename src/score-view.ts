@@ -76,6 +76,7 @@ export class BetterScoreView extends FileView {
   private redoButton: HTMLButtonElement | null = null;
   private markerButton: HTMLButtonElement | null = null;
   private eraserButton: HTMLButtonElement | null = null;
+  private fingerDrawingButton: HTMLButtonElement | null = null;
   private spreadModeButton: HTMLButtonElement | null = null;
   private readonly viewModeButtons = new Map<ViewMode, HTMLButtonElement>();
 
@@ -84,7 +85,9 @@ export class BetterScoreView extends FileView {
     private readonly getHighlighterWidth: () => number,
     private readonly setHighlighterWidth: (width: number) => Promise<void>,
     private readonly getEraserMode: () => EraserMode,
-    private readonly setEraserMode: (mode: EraserMode) => Promise<void>
+    private readonly setEraserMode: (mode: EraserMode) => Promise<void>,
+    private readonly getFingerDrawingEnabled: () => boolean,
+    private readonly setFingerDrawingEnabled: (enabled: boolean) => Promise<void>
   ) {
     super(leaf);
     this.navigation = true;
@@ -137,6 +140,12 @@ export class BetterScoreView extends FileView {
 
   setSpreadOffset(offset: SpreadOffset): void {
     this.navigationController?.setSpreadOffset(offset);
+  }
+
+  toggleFingerDrawing(): void {
+    void this.setFingerDrawingEnabled(!this.getFingerDrawingEnabled()).then(() => {
+      this.updateFingerDrawingButton();
+    });
   }
 
   async onLoadFile(file: TFile): Promise<void> {
@@ -245,6 +254,12 @@ export class BetterScoreView extends FileView {
       event.preventDefault();
       this.showEraserModeMenu(event);
     });
+    this.fingerDrawingButton = this.toolbar.createEl("button", {
+      cls: "clickable-icon betterscore-finger-drawing",
+      attr: {"aria-label": "Draw with finger", title: "Draw with finger"}
+    });
+    setIcon(this.fingerDrawingButton, "hand");
+    this.fingerDrawingButton.addEventListener("click", () => this.toggleFingerDrawing());
     this.toolbar.createDiv({cls: "betterscore-toolbar-divider"});
     this.undoButton = this.addActionButton("undo-2", "Undo", "Ctrl/⌘ Z", () => this.undo());
     this.redoButton = this.addActionButton(
@@ -256,6 +271,24 @@ export class BetterScoreView extends FileView {
     this.updateToolButtons();
     this.updateHistoryButtons();
     this.updateViewModeButtons();
+    this.updateFingerDrawingButton();
+  }
+
+  private updateFingerDrawingButton(): void {
+    const enabled = this.getFingerDrawingEnabled();
+    this.fingerDrawingButton?.toggleClass("is-active", enabled);
+    this.contentEl.toggleClass("is-finger-drawing", enabled);
+    const state = enabled ? "on" : "off";
+    this.fingerDrawingButton?.setAttribute(
+      "aria-label",
+      `Draw with finger: ${state}. Tap to turn ${enabled ? "off" : "on"}.`
+    );
+    this.fingerDrawingButton?.setAttribute(
+      "title",
+      enabled
+        ? "Finger drawing: on · Finger scrolling and page turns are disabled"
+        : "Finger drawing: off · Tap to draw with a finger"
+    );
   }
 
   private addViewModeButton(
@@ -416,7 +449,11 @@ export class BetterScoreView extends FileView {
   private handlePointerDown(surface: PageSurface, event: PointerEvent): void {
     const {pageNumber} = surface;
     const viewMode = this.navigationController?.getState().viewMode ?? "continuous";
-    const intent = routePointerInput(event.pointerType, viewMode);
+    const intent = routePointerInput(
+      event.pointerType,
+      viewMode,
+      this.getFingerDrawingEnabled()
+    );
     if (intent === "scroll") return;
     if (intent === "page-navigation") {
       if (this.navigationGesture) return;

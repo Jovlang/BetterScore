@@ -21,3 +21,9 @@ test("marker widths are persisted within safe bounds", () => {
   assert.equal(normalizeSettings({highlighterWidth: 1}).highlighterWidth, 0.08);
   assert.equal(normalizeSettings({highlighterWidth: 0}).highlighterWidth, 0.008);
 });
+
+test("finger drawing is opt-in and persists", () => {
+  assert.equal(normalizeSettings({}).fingerDrawingEnabled, false);
+  assert.equal(normalizeSettings({fingerDrawingEnabled: true}).fingerDrawingEnabled, true);
+  assert.equal(normalizeSettings({fingerDrawingEnabled: "yes"}).fingerDrawingEnabled, false);
+});

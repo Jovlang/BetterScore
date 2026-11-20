@@ -14,6 +14,12 @@ test("finger input scrolls continuous mode and navigates paged modes", () => {
   assert.equal(routePointerInput("touch", "spread"), "page-navigation");
 });
 
+test("finger drawing mode routes touch to annotation in every view mode", () => {
+  assert.equal(routePointerInput("touch", "continuous", true), "annotation");
+  assert.equal(routePointerInput("touch", "single", true), "annotation");
+  assert.equal(routePointerInput("touch", "spread", true), "annotation");
+});
+
 test("horizontal swipes and edge taps map to page navigation", () => {
   const base = {
     startX: 500,
