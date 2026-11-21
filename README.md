@@ -4,6 +4,8 @@ BetterScore is an Obsidian plugin for reading and annotating PDF sheet music. It
 
 The original PDF is never modified. BetterScore stores normalized annotation strokes in a versioned `.betterscore.json` sidecar beside the score, making annotations straightforward to sync, back up, and inspect independently of the plugin.
 
+![BetterScore showing thumbnail navigation, a two-page score spread, and highlighted passages](BetterScore.png)
+
 ## Current features
 
 - Continuous, single-page, and two-page spread PDF reading
