@@ -38,7 +38,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Explicit memory warning before large flattened exports
 - Desktop and mobile support
 
-BetterScore is currently an early prototype.
+BetterScore is in active beta development. Its core reader, annotation, navigation, persistence, and export workflows are implemented; physical iPad hardening remains ongoing.
 
 ## Install for development
 
