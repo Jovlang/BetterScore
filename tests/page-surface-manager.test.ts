@@ -6,6 +6,7 @@ import {
   capRenderScales,
   clampZoom,
   continuousRenderWindow,
+  retainedPagesToEvict,
   shouldFullyCachePagedDocument
 } from "../src/page-surface-manager";
 
@@ -62,4 +63,16 @@ test("continuous render fallback stays bounded around the active page", () => {
   assert.deepEqual(continuousRenderWindow(50, 300), [48, 49, 50, 51, 52]);
   assert.deepEqual(continuousRenderWindow(1, 300), [1, 2, 3]);
   assert.deepEqual(continuousRenderWindow(300, 300), [298, 299, 300]);
+});
+
+test("retained cache evicts oldest offscreen pages before protected pages", () => {
+  const mib = 1024 * 1024;
+  const candidates = [
+    {pageNumber: 1, bytes: 100 * mib, lastAccess: 1, protected: false},
+    {pageNumber: 2, bytes: 100 * mib, lastAccess: 2, protected: false},
+    {pageNumber: 3, bytes: 100 * mib, lastAccess: 3, protected: true},
+    {pageNumber: 4, bytes: 100 * mib, lastAccess: 4, protected: false}
+  ];
+  assert.deepEqual(retainedPagesToEvict(candidates, 250 * mib), [1, 2]);
+  assert.deepEqual(retainedPagesToEvict(candidates, 400 * mib), []);
 });

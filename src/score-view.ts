@@ -18,7 +18,7 @@ import {NavigationChange, NavigationController} from "./navigation-controller";
 import {pageNavigationAction, routePointerInput} from "./input-router";
 import {PageSurface} from "./page-surface";
 import {PageSurfaceManager} from "./page-surface-manager";
-import type {PageSurfaceStats} from "./page-surface-manager";
+import type {PageCacheOptions, PageSurfaceStats} from "./page-surface-manager";
 import {PdfExportController} from "./pdf-export-controller";
 import type {PdfDocument} from "./pdf-types";
 import {ThumbnailStrip} from "./thumbnail-strip";
@@ -100,7 +100,8 @@ export class BetterScoreView extends FileView {
     private readonly getEraserMode: () => EraserMode,
     private readonly setEraserMode: (mode: EraserMode) => Promise<void>,
     private readonly getFingerDrawingEnabled: () => boolean,
-    private readonly setFingerDrawingEnabled: (enabled: boolean) => Promise<void>
+    private readonly setFingerDrawingEnabled: (enabled: boolean) => Promise<void>,
+    private readonly getPageCacheOptions: () => PageCacheOptions
   ) {
     super(leaf);
     this.navigation = true;
@@ -159,6 +160,10 @@ export class BetterScoreView extends FileView {
 
   setSpreadOffset(offset: SpreadOffset): void {
     this.navigationController?.setSpreadOffset(offset);
+  }
+
+  async setPageCacheOptions(options: PageCacheOptions): Promise<void> {
+    await this.surfaceManager?.setCacheOptions(options);
   }
 
   toggleFingerDrawing(): void {
@@ -261,7 +266,7 @@ export class BetterScoreView extends FileView {
         onRenderError: (pageNumber, error) => {
           new Notice(`BetterScore could not render page ${pageNumber}: ${messageOf(error)}`);
         }
-      }, source.size);
+      }, source.size, this.getPageCacheOptions());
       this.thumbnailStrip = new ThumbnailStrip(
         this.thumbnailPane,
         this.pdf,

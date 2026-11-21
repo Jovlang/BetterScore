@@ -32,6 +32,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Persistent per-score spread pairing correction from the Spread button's right-click menu or command palette
 - Bounded neighbor prefetch so paged modes reuse rendered surfaces instead of rerendering every turn
 - Adaptive full-document paged caching for small PDFs within explicit source and canvas-memory budgets
+- Optional high-memory desktop cache that retains recently rendered pages across background tabs
 - Sharp, centered 50–300% zoom with keyboard shortcuts, Ctrl+wheel, and bounded canvas dimensions
 - A lazy, low-resolution thumbnail strip with current-page tracking
 - Non-destructive flattened PDF export to a new sibling file
@@ -65,6 +66,8 @@ npm run verify
 Flattened export preserves the original PDF and writes `Score.annotated.pdf` (or the next available numbered name). It rasterizes only the transparent annotation layer, at up to 2× resolution, and places that layer over each original PDF page with `pdf-lib`. Because `pdf-lib` holds the source and complete output in memory, BetterScore requires explicit confirmation for large exports (64 MiB on mobile, 192 MiB on desktop).
 
 Run **BetterScore: Show render statistics** from the command palette while a score is active to inspect mounted surfaces, canvases, pixel area, render queues, cached geometries, estimated placeholders, cancellations, and the viewport-centered page.
+
+On desktops with ample RAM, enable **Settings → BetterScore → High-memory desktop cache** (or use the command palette toggle). BetterScore then keeps recently rendered pages in each open score tab using an LRU cache. The configurable 256 MiB–2 GiB budget applies to each open tab and measures canvas backing stores; PDF.js resources and browser/GPU overhead are additional. Mobile always uses bounded viewport eviction.
 
 ## Annotation format
 

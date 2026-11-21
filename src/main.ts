@@ -1,8 +1,23 @@
-import {Notice, Plugin, TFile, WorkspaceLeaf} from "obsidian";
+import {
+  App,
+  Notice,
+  Platform,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  TFile,
+  WorkspaceLeaf
+} from "obsidian";
 import {AnnotationStore} from "./annotation-store";
 import {BetterScoreView, VIEW_TYPE_BETTERSCORE} from "./score-view";
 import {ScoreSwitcherModal} from "./score-switcher";
-import {BetterScoreSettings, EraserMode, normalizeSettings} from "./settings";
+import {
+  BetterScoreSettings,
+  DESKTOP_CACHE_BUDGETS_MB,
+  EraserMode,
+  normalizeSettings
+} from "./settings";
+import type {PageCacheOptions} from "./page-surface-manager";
 import type {ViewMode} from "./viewer-layout";
 
 export default class BetterScorePlugin extends Plugin {
@@ -20,9 +35,11 @@ export default class BetterScorePlugin extends Plugin {
         () => this.pluginSettings.eraserMode,
         (mode) => this.setEraserMode(mode),
         () => this.pluginSettings.fingerDrawingEnabled,
-        (enabled) => this.setFingerDrawingEnabled(enabled)
+        (enabled) => this.setFingerDrawingEnabled(enabled),
+        () => this.pageCacheOptions()
       )
     );
+    this.addSettingTab(new BetterScoreSettingTab(this.app, this));
 
     this.addCommand({
       id: "open-active-pdf",
@@ -51,7 +68,11 @@ export default class BetterScorePlugin extends Plugin {
           new Notice(
             `BetterScore page ${stats.currentPage}/${stats.totalPages} · `
             + `${stats.mountedSurfaces} surfaces · ${stats.activeCanvases} canvases · `
-            + `${stats.totalCanvasPixels.toLocaleString()} px · `
+            + `${stats.totalCanvasPixels.toLocaleString()} px `
+            + `(~${Math.round(stats.estimatedCanvasBytes / (1024 * 1024))} MiB`
+            + `${stats.canvasBudgetBytes === null
+              ? ""
+              : ` / ${Math.round(stats.canvasBudgetBytes / (1024 * 1024))} MiB budget`}) · `
             + `${Math.round(stats.zoom * 100)}% zoom · `
             + `${stats.queuedRenders} queued · ${stats.activeRenders} rendering · `
             + `${stats.cancelledRenders} cancelled · ${stats.cacheStrategy} cache `
@@ -150,6 +171,19 @@ export default class BetterScorePlugin extends Plugin {
         (view) => view.exportFlattenedPdf()
       )
     });
+    this.addCommand({
+      id: "toggle-high-memory-desktop-cache",
+      name: "Toggle high-memory desktop cache",
+      checkCallback: (checking) => {
+        if (Platform.isMobile) return false;
+        if (checking) return true;
+        const enabled = !this.pluginSettings.highMemoryDesktopCache;
+        void this.setHighMemoryDesktopCache(enabled).then(() => {
+          new Notice(`BetterScore high-memory desktop cache: ${enabled ? "on" : "off"}`);
+        });
+        return true;
+      }
+    });
     this.addRibbonIcon("music-2", "Open BetterScore score switcher", () => {
       this.openScoreSwitcher();
     });
@@ -211,6 +245,44 @@ export default class BetterScorePlugin extends Plugin {
     await this.saveData(this.pluginSettings);
   }
 
+  getSettings(): BetterScoreSettings {
+    return this.pluginSettings;
+  }
+
+  async setHighMemoryDesktopCache(enabled: boolean): Promise<void> {
+    this.pluginSettings = normalizeSettings({
+      ...this.pluginSettings,
+      highMemoryDesktopCache: enabled
+    });
+    await this.saveData(this.pluginSettings);
+    await this.refreshOpenScoreCacheOptions();
+  }
+
+  async setDesktopCacheBudgetMb(budget: number): Promise<void> {
+    this.pluginSettings = normalizeSettings({
+      ...this.pluginSettings,
+      desktopCacheBudgetMb: budget
+    });
+    await this.saveData(this.pluginSettings);
+    await this.refreshOpenScoreCacheOptions();
+  }
+
+  private pageCacheOptions(): PageCacheOptions {
+    return {
+      retainRenderedPages: !Platform.isMobile && this.pluginSettings.highMemoryDesktopCache,
+      maxCanvasBytes: this.pluginSettings.desktopCacheBudgetMb * 1024 * 1024
+    };
+  }
+
+  private async refreshOpenScoreCacheOptions(): Promise<void> {
+    const options = this.pageCacheOptions();
+    await Promise.all(this.app.workspace.getLeavesOfType(VIEW_TYPE_BETTERSCORE).map((leaf) => {
+      return leaf.view instanceof BetterScoreView
+        ? leaf.view.setPageCacheOptions(options)
+        : Promise.resolve();
+    }));
+  }
+
   private withActiveScore(checking: boolean, action: (view: BetterScoreView) => void): boolean {
     const view = this.app.workspace.getActiveViewOfType(BetterScoreView);
     if (!view) return false;
@@ -226,6 +298,40 @@ export default class BetterScorePlugin extends Plugin {
       active: true
     });
     await this.app.workspace.revealLeaf(target);
+  }
+}
+
+class BetterScoreSettingTab extends PluginSettingTab {
+  constructor(app: App, private readonly plugin: BetterScorePlugin) {
+    super(app, plugin);
+  }
+
+  display(): void {
+    this.containerEl.empty();
+    const settings = this.plugin.getSettings();
+    new Setting(this.containerEl)
+      .setName("High-memory desktop cache")
+      .setDesc(
+        "Keep rendered score pages in RAM across navigation and background tabs. Recommended only on desktops with ample memory; mobile always uses bounded eviction."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(settings.highMemoryDesktopCache)
+          .setDisabled(Platform.isMobile)
+          .onChange((enabled) => this.plugin.setHighMemoryDesktopCache(enabled));
+      });
+    new Setting(this.containerEl)
+      .setName("Canvas cache budget per open score tab")
+      .setDesc("Maximum estimated canvas memory retained by each open BetterScore tab.")
+      .addDropdown((dropdown) => {
+        for (const budget of DESKTOP_CACHE_BUDGETS_MB) {
+          dropdown.addOption(String(budget), budget >= 1024 ? `${budget / 1024} GiB` : `${budget} MiB`);
+        }
+        dropdown
+          .setValue(String(settings.desktopCacheBudgetMb))
+          .setDisabled(Platform.isMobile)
+          .onChange((value) => this.plugin.setDesktopCacheBudgetMb(Number(value)));
+      });
   }
 }
 

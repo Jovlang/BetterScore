@@ -27,3 +27,10 @@ test("finger drawing is opt-in and persists", () => {
   assert.equal(normalizeSettings({fingerDrawingEnabled: true}).fingerDrawingEnabled, true);
   assert.equal(normalizeSettings({fingerDrawingEnabled: "yes"}).fingerDrawingEnabled, false);
 });
+
+test("high-memory desktop cache is opt-in with a bounded budget", () => {
+  assert.equal(normalizeSettings({}).highMemoryDesktopCache, false);
+  assert.equal(normalizeSettings({highMemoryDesktopCache: true}).highMemoryDesktopCache, true);
+  assert.equal(normalizeSettings({desktopCacheBudgetMb: 2048}).desktopCacheBudgetMb, 2048);
+  assert.equal(normalizeSettings({desktopCacheBudgetMb: 4096}).desktopCacheBudgetMb, 1024);
+});

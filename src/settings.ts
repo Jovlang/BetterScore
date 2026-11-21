@@ -4,13 +4,19 @@ export interface BetterScoreSettings {
   highlighterWidth: number;
   eraserMode: EraserMode;
   fingerDrawingEnabled: boolean;
+  highMemoryDesktopCache: boolean;
+  desktopCacheBudgetMb: number;
 }
 
 export const DEFAULT_SETTINGS: BetterScoreSettings = {
   highlighterWidth: 0.022,
   eraserMode: "stroke",
-  fingerDrawingEnabled: false
+  fingerDrawingEnabled: false,
+  highMemoryDesktopCache: false,
+  desktopCacheBudgetMb: 1024
 };
+
+export const DESKTOP_CACHE_BUDGETS_MB = [256, 512, 1024, 2048] as const;
 
 export const HIGHLIGHTER_WIDTH_PRESETS = [
   {label: "Thin", width: 0.012},
@@ -27,8 +33,16 @@ export function normalizeSettings(value: unknown): BetterScoreSettings {
   return {
     highlighterWidth: Math.max(0.008, Math.min(0.08, highlighterWidth)),
     eraserMode: value.eraserMode === "precision" ? "precision" : "stroke",
-    fingerDrawingEnabled: value.fingerDrawingEnabled === true
+    fingerDrawingEnabled: value.fingerDrawingEnabled === true,
+    highMemoryDesktopCache: value.highMemoryDesktopCache === true,
+    desktopCacheBudgetMb: normalizeDesktopCacheBudget(value.desktopCacheBudgetMb)
   };
+}
+
+function normalizeDesktopCacheBudget(value: unknown): number {
+  if (typeof value !== "number") return DEFAULT_SETTINGS.desktopCacheBudgetMb;
+  return DESKTOP_CACHE_BUDGETS_MB.find((budget) => budget === value)
+    ?? DEFAULT_SETTINGS.desktopCacheBudgetMb;
 }
 
 export function highlighterWidthLabel(width: number): string {

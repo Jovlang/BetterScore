@@ -17,7 +17,12 @@ const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 3;
 const MAX_CANVAS_DIMENSION = 4096;
 
-export type PageCacheStrategy = "continuous" | "windowed" | "full";
+export type PageCacheStrategy = "continuous" | "windowed" | "full" | "retained";
+
+export interface PageCacheOptions {
+  retainRenderedPages: boolean;
+  maxCanvasBytes: number;
+}
 
 export interface RenderScales {
   cssScale: number;
@@ -38,6 +43,8 @@ export interface PageSurfaceStats {
   desiredPages: number;
   cachedGeometries: number;
   estimatedSlots: number;
+  estimatedCanvasBytes: number;
+  canvasBudgetBytes: number | null;
   zoom: number;
 }
 
@@ -60,6 +67,7 @@ export class PageSurfaceManager {
   private readonly desiredPages = new Set<number>();
   private readonly queuedPages = new Set<number>();
   private readonly renderQueue: QueuedRender[] = [];
+  private readonly surfaceAccess = new Map<number, number>();
   private observer: IntersectionObserver | null = null;
   private activeRenders = 0;
   private cancelledRenders = 0;
@@ -71,13 +79,18 @@ export class PageSurfaceManager {
   private layoutRevision = 0;
   private scrollFrame: number | null = null;
   private resizeFrame: number | null = null;
+  private accessSequence = 0;
   private disposed = false;
 
   constructor(
     private readonly container: HTMLElement,
     private readonly pdf: PdfDocument,
     private readonly callbacks: PageSurfaceManagerCallbacks,
-    private readonly sourceSizeBytes = Number.POSITIVE_INFINITY
+    private readonly sourceSizeBytes = Number.POSITIVE_INFINITY,
+    private cacheOptions: PageCacheOptions = {
+      retainRenderedPages: false,
+      maxCanvasBytes: 0
+    }
   ) {
     window.addEventListener("resize", this.handleResize, {passive: true});
   }
@@ -160,6 +173,8 @@ export class PageSurfaceManager {
   async renderPage(pageNumber: number): Promise<void> {
     const surface = await this.mountPage(pageNumber);
     await surface.renderPdf();
+    this.touchSurface(pageNumber);
+    this.enforceRetainedCanvasBudget();
   }
 
   renderWindow(pageNumbers: Iterable<number>): void {
@@ -167,10 +182,11 @@ export class PageSurfaceManager {
     for (const pageNumber of this.desiredPages) {
       if (!requested.has(pageNumber)) {
         this.desiredPages.delete(pageNumber);
-        this.evictPage(pageNumber);
+        if (!this.cacheOptions.retainRenderedPages) this.evictPage(pageNumber);
       }
     }
     for (const pageNumber of requested) this.requestRender(pageNumber);
+    this.enforceRetainedCanvasBudget();
   }
 
   evictPage(pageNumber: number): void {
@@ -178,6 +194,7 @@ export class PageSurfaceManager {
     if (!surface) return;
     if (surface.destroy()) this.cancelledRenders += 1;
     this.surfaces.delete(pageNumber);
+    this.surfaceAccess.delete(pageNumber);
   }
 
   getSurface(pageNumber: number): PageSurface | undefined {
@@ -213,6 +230,17 @@ export class PageSurfaceManager {
     return this.setLayout(this.layoutState, true);
   }
 
+  async setCacheOptions(options: PageCacheOptions): Promise<void> {
+    const wasRetaining = this.cacheOptions.retainRenderedPages;
+    this.cacheOptions = options;
+    if (!options.retainRenderedPages && wasRetaining) {
+      await this.setLayout(this.layoutState, true);
+      return;
+    }
+    this.enforceRetainedCanvasBudget();
+    this.updateCacheStrategy();
+  }
+
   scrollToPage(pageNumber: number, behavior: ScrollBehavior = "auto"): boolean {
     const slot = this.slots.get(pageNumber);
     if (!slot) return false;
@@ -246,6 +274,10 @@ export class PageSurfaceManager {
       estimatedSlots: [...this.slots.keys()].filter((pageNumber) => {
         return !this.pageGeometry.has(pageNumber);
       }).length,
+      estimatedCanvasBytes: totalCanvasPixels * 4,
+      canvasBudgetBytes: this.cacheOptions.retainRenderedPages
+        ? this.cacheOptions.maxCanvasBytes
+        : null,
       zoom: this.zoom
     };
   }
@@ -275,6 +307,7 @@ export class PageSurfaceManager {
       if (surface.destroy()) this.cancelledRenders += 1;
     }
     this.surfaces.clear();
+    this.surfaceAccess.clear();
     this.mounting.clear();
     this.slots.clear();
     this.container.empty();
@@ -292,6 +325,10 @@ export class PageSurfaceManager {
     for (const [pageNumber, slot] of this.slots) {
       if (retained.has(pageNumber)) continue;
       this.desiredPages.delete(pageNumber);
+      if (this.cacheOptions.retainRenderedPages) {
+        slot.addClass("betterscore-page-cached");
+        continue;
+      }
       this.evictPage(pageNumber);
       slot.remove();
       this.slots.delete(pageNumber);
@@ -348,6 +385,7 @@ export class PageSurfaceManager {
       throw new StaleLayoutError();
     }
     this.surfaces.set(pageNumber, surface);
+    this.touchSurface(pageNumber);
     this.callbacks.drawAnnotations(surface);
     return surface;
   }
@@ -455,7 +493,7 @@ export class PageSurfaceManager {
 
   private renderWindowForState(state: ViewerState): number[] {
     if (state.viewMode === "continuous") {
-      this.cacheStrategy = "continuous";
+      this.updateCacheStrategy();
       return pagesForRenderWindow(state, this.pdf.numPages);
     }
     const estimatedCanvasBytes = this.estimatePagedCanvasBytes(state.viewMode);
@@ -464,7 +502,9 @@ export class PageSurfaceManager {
       sourceSizeBytes: this.sourceSizeBytes,
       estimatedCanvasBytes
     });
-    this.cacheStrategy = fullCache ? "full" : "windowed";
+    this.cacheStrategy = fullCache
+      ? "full"
+      : (this.cacheOptions.retainRenderedPages ? "retained" : "windowed");
     return fullCache
       ? Array.from({length: this.pdf.numPages}, (_, index) => index + 1)
       : pagesForRenderWindow(state, this.pdf.numPages);
@@ -497,7 +537,8 @@ export class PageSurfaceManager {
             this.requestRender(pageNumber);
           } else {
             this.desiredPages.delete(pageNumber);
-            this.evictPage(pageNumber);
+            if (this.cacheOptions.retainRenderedPages) this.enforceRetainedCanvasBudget();
+            else this.evictPage(pageNumber);
           }
         }
         this.scheduleCurrentPageUpdate();
@@ -512,7 +553,10 @@ export class PageSurfaceManager {
     if (pageNumber < 1 || pageNumber > this.pdf.numPages) return;
     this.desiredPages.add(pageNumber);
     const surface = this.surfaces.get(pageNumber);
-    if (surface?.isPdfRendered()) return;
+    if (surface?.isPdfRendered()) {
+      this.touchSurface(pageNumber);
+      return;
+    }
     if (this.queuedPages.has(pageNumber)) {
       if (priority) {
         const index = this.renderQueue.findIndex((queued) => queued.pageNumber === pageNumber);
@@ -554,7 +598,11 @@ export class PageSurfaceManager {
         return;
       }
       await surface.renderPdf();
-      if (!this.desiredPages.has(queued.pageNumber)) this.evictPage(queued.pageNumber);
+      this.touchSurface(queued.pageNumber);
+      if (!this.desiredPages.has(queued.pageNumber) && !this.cacheOptions.retainRenderedPages) {
+        this.evictPage(queued.pageNumber);
+      }
+      this.enforceRetainedCanvasBudget();
     } catch (error) {
       if (!this.disposed && !(error instanceof StaleLayoutError)) {
         this.callbacks.onRenderError?.(queued.pageNumber, error);
@@ -602,6 +650,33 @@ export class PageSurfaceManager {
     if (!this.observer) {
       this.renderWindow(continuousRenderWindow(nearestPage, this.pdf.numPages));
     }
+  }
+
+  private touchSurface(pageNumber: number): void {
+    this.surfaceAccess.set(pageNumber, ++this.accessSequence);
+  }
+
+  private enforceRetainedCanvasBudget(): void {
+    if (!this.cacheOptions.retainRenderedPages) return;
+    const candidates = [...this.surfaces.entries()].map(([pageNumber, surface]) => ({
+      pageNumber,
+      bytes: surface.getCanvasPixelArea() * 4,
+      lastAccess: this.surfaceAccess.get(pageNumber) ?? 0,
+      protected: this.desiredPages.has(pageNumber)
+    }));
+    for (const pageNumber of retainedPagesToEvict(
+      candidates,
+      this.cacheOptions.maxCanvasBytes
+    )) {
+      this.evictPage(pageNumber);
+    }
+  }
+
+  private updateCacheStrategy(): void {
+    if (this.layoutState.viewMode !== "continuous" && this.cacheStrategy === "full") return;
+    if (this.cacheOptions.retainRenderedPages) this.cacheStrategy = "retained";
+    else if (this.layoutState.viewMode === "continuous") this.cacheStrategy = "continuous";
+    else this.cacheStrategy = "windowed";
   }
 
   private availableContinuousWidth(): number {
@@ -713,6 +788,31 @@ export function continuousRenderWindow(
   const first = Math.max(1, current - Math.max(0, radius));
   const last = Math.min(pageCount, current + Math.max(0, radius));
   return Array.from({length: Math.max(0, last - first + 1)}, (_, index) => first + index);
+}
+
+export interface RetainedPageCandidate {
+  pageNumber: number;
+  bytes: number;
+  lastAccess: number;
+  protected: boolean;
+}
+
+export function retainedPagesToEvict(
+  candidates: RetainedPageCandidate[],
+  maxBytes: number
+): number[] {
+  let totalBytes = candidates.reduce((sum, candidate) => sum + candidate.bytes, 0);
+  if (totalBytes <= maxBytes) return [];
+  const evicted: number[] = [];
+  const available = candidates
+    .filter((candidate) => !candidate.protected)
+    .sort((left, right) => left.lastAccess - right.lastAccess);
+  for (const candidate of available) {
+    if (totalBytes <= maxBytes) break;
+    totalBytes -= candidate.bytes;
+    evicted.push(candidate.pageNumber);
+  }
+  return evicted;
 }
 
 function applyZoom(scales: RenderScales, zoom: number): RenderScales {
