@@ -18,10 +18,17 @@ import {
   normalizeSettings
 } from "./settings";
 import type {PageCacheOptions} from "./page-surface-manager";
-import type {ViewMode} from "./viewer-layout";
+import {rememberReadingPosition, restoreReadingPosition} from "./reading-position";
+import {SaveCoordinator} from "./save-coordinator";
+import type {ViewerState, ViewMode} from "./viewer-layout";
 
 export default class BetterScorePlugin extends Plugin {
   private pluginSettings: BetterScoreSettings = normalizeSettings(null);
+  private readonly dataSaves = new SaveCoordinator(
+    () => this.saveData(this.pluginSettings),
+    600,
+    (error) => this.reportDataSaveError(error)
+  );
 
   async onload(): Promise<void> {
     this.pluginSettings = normalizeSettings(await this.loadData());
@@ -36,10 +43,19 @@ export default class BetterScorePlugin extends Plugin {
         (mode) => this.setEraserMode(mode),
         () => this.pluginSettings.fingerDrawingEnabled,
         (enabled) => this.setFingerDrawingEnabled(enabled),
-        () => this.pageCacheOptions()
+        () => this.pageCacheOptions(),
+        {
+          restore: (fingerprint, fallback) =>
+            restoreReadingPosition(this.pluginSettings.readingPositions, fingerprint, fallback),
+          remember: (fingerprint, state) => this.rememberPosition(fingerprint, state),
+          flush: () => this.flushPluginData()
+        }
       )
     );
     this.addSettingTab(new BetterScoreSettingTab(this.app, this));
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "hidden") void this.flushPluginData();
+    });
 
     this.addCommand({
       id: "open-active-pdf",
@@ -221,7 +237,32 @@ export default class BetterScorePlugin extends Plugin {
       ...this.pluginSettings,
       highlighterWidth: width
     });
-    await this.saveData(this.pluginSettings);
+    await this.persistSettings();
+  }
+
+  private rememberPosition(fingerprint: string, state: ViewerState): void {
+    const previous = this.pluginSettings.readingPositions;
+    const readingPositions = rememberReadingPosition(previous, fingerprint, state);
+    if (readingPositions === previous) return;
+    this.pluginSettings = {...this.pluginSettings, readingPositions};
+    this.dataSaves.schedule();
+  }
+
+  private async persistSettings(): Promise<void> {
+    this.dataSaves.schedule();
+    await this.flushPluginData();
+  }
+
+  private async flushPluginData(): Promise<void> {
+    try {
+      await this.dataSaves.flush();
+    } catch (error) {
+      this.reportDataSaveError(error);
+    }
+  }
+
+  private reportDataSaveError(error: unknown): void {
+    new Notice(`BetterScore could not save plugin data: ${messageOf(error)}`);
   }
 
   private openScoreSwitcher(): void {
@@ -237,12 +278,12 @@ export default class BetterScorePlugin extends Plugin {
 
   private async setEraserMode(mode: EraserMode): Promise<void> {
     this.pluginSettings = normalizeSettings({...this.pluginSettings, eraserMode: mode});
-    await this.saveData(this.pluginSettings);
+    await this.persistSettings();
   }
 
   private async setFingerDrawingEnabled(enabled: boolean): Promise<void> {
     this.pluginSettings = normalizeSettings({...this.pluginSettings, fingerDrawingEnabled: enabled});
-    await this.saveData(this.pluginSettings);
+    await this.persistSettings();
   }
 
   getSettings(): BetterScoreSettings {
@@ -254,7 +295,7 @@ export default class BetterScorePlugin extends Plugin {
       ...this.pluginSettings,
       highMemoryDesktopCache: enabled
     });
-    await this.saveData(this.pluginSettings);
+    await this.persistSettings();
     await this.refreshOpenScoreCacheOptions();
   }
 
@@ -263,7 +304,7 @@ export default class BetterScorePlugin extends Plugin {
       ...this.pluginSettings,
       desktopCacheBudgetMb: budget
     });
-    await this.saveData(this.pluginSettings);
+    await this.persistSettings();
     await this.refreshOpenScoreCacheOptions();
   }
 

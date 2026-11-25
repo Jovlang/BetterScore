@@ -47,6 +47,12 @@ export const VIEW_TYPE_BETTERSCORE = "betterscore-pdf";
 
 type ActiveTool = AnnotationTool | "eraser" | "text";
 
+interface ReadingPositionPersistence {
+  restore: (fingerprint: string, fallback: ViewerState) => ViewerState;
+  remember: (fingerprint: string, state: ViewerState) => void;
+  flush: () => Promise<void>;
+}
+
 interface NavigationGesture {
   surface: PageSurface;
   pointerId: number;
@@ -74,6 +80,7 @@ export class BetterScoreView extends FileView {
   private annotationBlockReason = "";
   private surfaceManager: PageSurfaceManager | null = null;
   private navigationController: NavigationController | null = null;
+  private readingFingerprint: string | null = null;
   private renderedViewMode: ViewMode | null = null;
   private navigationGesture: NavigationGesture | null = null;
   private tool: ActiveTool = "pen";
@@ -109,7 +116,8 @@ export class BetterScoreView extends FileView {
     private readonly setEraserMode: (mode: EraserMode) => Promise<void>,
     private readonly getFingerDrawingEnabled: () => boolean,
     private readonly setFingerDrawingEnabled: (enabled: boolean) => Promise<void>,
-    private readonly getPageCacheOptions: () => PageCacheOptions
+    private readonly getPageCacheOptions: () => PageCacheOptions,
+    private readonly readingPositions: ReadingPositionPersistence
   ) {
     super(leaf);
     this.navigation = true;
@@ -214,14 +222,16 @@ export class BetterScoreView extends FileView {
 
   async onUnloadFile(file: TFile): Promise<void> {
     this.finishAnnotation();
-    await this.flushSave();
+    this.readingFingerprint = null;
+    await Promise.all([this.flushSave(), this.readingPositions.flush()]);
     await this.destroyPdf();
     await super.onUnloadFile(file);
   }
 
   async onClose(): Promise<void> {
     this.finishAnnotation();
-    await this.disposeSaveCoordinator();
+    this.readingFingerprint = null;
+    await Promise.all([this.disposeSaveCoordinator(), this.readingPositions.flush()]);
     await this.destroyPdf();
   }
 
@@ -230,6 +240,7 @@ export class BetterScoreView extends FileView {
     this.undoStack = [];
     this.redoStack = [];
     this.navigationController = null;
+    this.readingFingerprint = null;
     this.renderedViewMode = null;
     this.navigationGesture = null;
     this.thumbnailsOpen = false;
@@ -265,7 +276,9 @@ export class BetterScoreView extends FileView {
       this.navigationController = new NavigationController(
         this.pdf.numPages,
         (change) => this.handleNavigationChange(change),
-        {...createViewerState(), spreadOffset: this.annotations.settings.spreadOffset}
+        this.readingPositions.restore(source.fingerprint, {
+          ...createViewerState(), spreadOffset: this.annotations.settings.spreadOffset
+        })
       );
       this.updateViewModeButtons();
       this.scoreContainer.empty();
@@ -294,8 +307,10 @@ export class BetterScoreView extends FileView {
         }
       );
       const initialState = this.navigationController.getState();
+      this.thumbnailStrip.setCurrentPage(initialState.currentPage, this.thumbnailsOpen);
       if (await this.surfaceManager.setLayout(initialState)) {
         this.renderedViewMode = initialState.viewMode;
+        this.readingFingerprint = source.fingerprint;
       }
     } catch (error) {
       this.thumbnailStrip?.dispose();
@@ -898,6 +913,7 @@ export class BetterScoreView extends FileView {
   }
 
   private handleNavigationChange(change: NavigationChange): void {
+    if (this.readingFingerprint) this.readingPositions.remember(this.readingFingerprint, change.state);
     this.updateViewModeButtons();
     this.thumbnailStrip?.setCurrentPage(change.state.currentPage, this.thumbnailsOpen);
     if (this.annotations.settings.spreadOffset !== change.state.spreadOffset) {

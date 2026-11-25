@@ -1,3 +1,6 @@
+import {normalizeReadingPositions} from "./reading-position";
+import type {ReadingPosition} from "./reading-position";
+
 export type EraserMode = "stroke" | "precision";
 
 export interface BetterScoreSettings {
@@ -6,6 +9,7 @@ export interface BetterScoreSettings {
   fingerDrawingEnabled: boolean;
   highMemoryDesktopCache: boolean;
   desktopCacheBudgetMb: number;
+  readingPositions: ReadingPosition[];
 }
 
 export const DEFAULT_SETTINGS: BetterScoreSettings = {
@@ -13,7 +17,8 @@ export const DEFAULT_SETTINGS: BetterScoreSettings = {
   eraserMode: "stroke",
   fingerDrawingEnabled: false,
   highMemoryDesktopCache: false,
-  desktopCacheBudgetMb: 1024
+  desktopCacheBudgetMb: 1024,
+  readingPositions: []
 };
 
 export const DESKTOP_CACHE_BUDGETS_MB = [256, 512, 1024, 2048] as const;
@@ -26,7 +31,7 @@ export const HIGHLIGHTER_WIDTH_PRESETS = [
 ] as const;
 
 export function normalizeSettings(value: unknown): BetterScoreSettings {
-  if (!isRecord(value)) return {...DEFAULT_SETTINGS};
+  if (!isRecord(value)) return {...DEFAULT_SETTINGS, readingPositions: []};
   const highlighterWidth = typeof value.highlighterWidth === "number"
     ? value.highlighterWidth
     : DEFAULT_SETTINGS.highlighterWidth;
@@ -35,7 +40,8 @@ export function normalizeSettings(value: unknown): BetterScoreSettings {
     eraserMode: value.eraserMode === "precision" ? "precision" : "stroke",
     fingerDrawingEnabled: value.fingerDrawingEnabled === true,
     highMemoryDesktopCache: value.highMemoryDesktopCache === true,
-    desktopCacheBudgetMb: normalizeDesktopCacheBudget(value.desktopCacheBudgetMb)
+    desktopCacheBudgetMb: normalizeDesktopCacheBudget(value.desktopCacheBudgetMb),
+    readingPositions: normalizeReadingPositions(value.readingPositions)
   };
 }
 
