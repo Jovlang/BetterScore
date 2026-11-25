@@ -16,6 +16,7 @@ import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
 import {SaveCoordinator} from "./save-coordinator";
 import {NavigationChange, NavigationController} from "./navigation-controller";
 import {pageNavigationAction, routePointerInput} from "./input-router";
+import {FingerPan} from "./finger-pan";
 import {PageSurface} from "./page-surface";
 import {PageSurfaceManager} from "./page-surface-manager";
 import type {PageCacheOptions, PageSurfaceStats} from "./page-surface-manager";
@@ -47,10 +48,17 @@ export const VIEW_TYPE_BETTERSCORE = "betterscore-pdf";
 type ActiveTool = AnnotationTool | "eraser" | "text";
 
 interface NavigationGesture {
+  surface: PageSurface;
   pointerId: number;
   startX: number;
   startY: number;
   startedAt: number;
+}
+
+interface AnnotationGesture {
+  surface: PageSurface;
+  pointerId: number;
+  stroke: Stroke | null;
 }
 
 export class BetterScoreView extends FileView {
@@ -72,8 +80,8 @@ export class BetterScoreView extends FileView {
   private undoStack: AnnotationDocument[] = [];
   private redoStack: AnnotationDocument[] = [];
   private readonly saveCoordinator: SaveCoordinator<PreparedAnnotationSave>;
-  private activeStroke: Stroke | null = null;
-  private activePage: number | null = null;
+  private annotationGesture: AnnotationGesture | null = null;
+  private fingerPan: FingerPan | null = null;
   private toolbar: HTMLElement | null = null;
   private viewerBody: HTMLElement | null = null;
   private thumbnailPane: HTMLElement | null = null;
@@ -205,12 +213,14 @@ export class BetterScoreView extends FileView {
   }
 
   async onUnloadFile(file: TFile): Promise<void> {
+    this.finishAnnotation();
     await this.flushSave();
     await this.destroyPdf();
     await super.onUnloadFile(file);
   }
 
   async onClose(): Promise<void> {
+    this.finishAnnotation();
     await this.disposeSaveCoordinator();
     await this.destroyPdf();
   }
@@ -231,6 +241,10 @@ export class BetterScoreView extends FileView {
     this.viewerBody = this.contentEl.createDiv({cls: "betterscore-viewer-body"});
     this.thumbnailPane = this.viewerBody.createDiv({cls: "betterscore-thumbnail-pane"});
     this.scoreContainer = this.viewerBody.createDiv({cls: "betterscore-pages"});
+    this.fingerPan = new FingerPan(this.scoreContainer, () =>
+      this.navigationController?.getState().viewMode === "continuous"
+      && !this.getFingerDrawingEnabled()
+    );
     this.scoreContainer.createDiv({cls: "betterscore-loading", text: "Loading score…"});
 
     try {
@@ -259,6 +273,10 @@ export class BetterScoreView extends FileView {
         onPointerDown: (surface, event) => this.handlePointerDown(surface, event),
         onPointerMove: (surface, event) => this.handlePointerMove(surface, event),
         onPointerEnd: (surface, event) => this.handlePointerEnd(surface, event),
+        onSurfaceDestroy: (surface) => {
+          if (this.annotationGesture?.surface === surface) this.finishAnnotation();
+          if (this.navigationGesture?.surface === surface) this.navigationGesture = null;
+        },
         drawAnnotations: (surface) => this.drawSurface(surface),
         onCurrentPageChange: (pageNumber) => {
           this.navigationController?.syncViewportPage(pageNumber);
@@ -355,7 +373,7 @@ export class BetterScoreView extends FileView {
   private updateFingerDrawingButton(): void {
     const enabled = this.getFingerDrawingEnabled();
     this.fingerDrawingButton?.toggleClass("is-active", enabled);
-    this.contentEl.toggleClass("is-finger-drawing", enabled);
+    if (enabled) this.fingerPan?.reset();
     const state = enabled ? "on" : "off";
     this.fingerDrawingButton?.setAttribute(
       "aria-label",
@@ -572,6 +590,7 @@ export class BetterScoreView extends FileView {
       event.preventDefault();
       surface.capturePointer(event.pointerId);
       this.navigationGesture = {
+        surface,
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
@@ -579,7 +598,7 @@ export class BetterScoreView extends FileView {
       };
       return;
     }
-    if (event.button !== 0 && event.pointerType === "mouse") return;
+    if (this.annotationGesture || (event.button !== 0 && event.pointerType === "mouse")) return;
     if (!this.annotationsWritable) {
       new Notice(`BetterScore: ${this.annotationBlockReason}`);
       return;
@@ -593,16 +612,15 @@ export class BetterScoreView extends FileView {
     }
 
     surface.capturePointer(event.pointerId);
+    const gesture: AnnotationGesture = {surface, pointerId: event.pointerId, stroke: null};
+    this.annotationGesture = gesture;
+    this.pushUndoState();
     if (this.tool === "eraser") {
-      this.pushUndoState();
-      this.activePage = pageNumber;
       this.eraseAt(pageNumber, point);
       return;
     }
 
-    this.pushUndoState();
-    this.activePage = pageNumber;
-    this.activeStroke = {
+    gesture.stroke = {
       id: crypto.randomUUID(),
       tool: this.tool,
       color: this.tool === "highlighter" ? "#ffd60a" : "#e53935",
@@ -610,54 +628,57 @@ export class BetterScoreView extends FileView {
       width: this.tool === "highlighter" ? this.getHighlighterWidth() : 0.0045,
       points: [point]
     };
-    this.page(pageNumber).strokes.push(this.activeStroke);
+    this.page(pageNumber).strokes.push(gesture.stroke);
     this.drawPage(pageNumber);
   }
 
   private handlePointerMove(surface: PageSurface, event: PointerEvent): void {
-    if (this.navigationGesture?.pointerId === event.pointerId) {
+    if (this.navigationGesture?.pointerId === event.pointerId && this.navigationGesture.surface === surface) {
       event.preventDefault();
       return;
     }
-    if (!surface.hasPointerCapture(event.pointerId)) return;
+    // Touch contacts can be implicitly captured, even when routed away from ink.
+    const gesture = this.annotationGesture;
+    if (!gesture || gesture.pointerId !== event.pointerId || gesture.surface !== surface) return;
     const point = surface.pointFromEvent(event);
-    if (this.tool === "eraser") {
+    if (!gesture.stroke) {
       this.eraseAt(surface.pageNumber, point);
-    } else if (this.activeStroke && this.activePage === surface.pageNumber) {
-      const previous = this.activeStroke.points[this.activeStroke.points.length - 1];
+    } else {
+      const previous = gesture.stroke.points[gesture.stroke.points.length - 1];
       if (!previous || shouldRecordSample(previous, point)) {
-        this.activeStroke.points.push(point);
+        gesture.stroke.points.push(point);
         this.drawPage(surface.pageNumber);
       }
     }
   }
 
   private handlePointerEnd(surface: PageSurface, event: PointerEvent): void {
-    if (this.navigationGesture?.pointerId === event.pointerId) {
+    if (this.navigationGesture?.pointerId === event.pointerId && this.navigationGesture.surface === surface) {
       const gesture = this.navigationGesture;
       this.navigationGesture = null;
       surface.releasePointer(event.pointerId);
       if (event.type === "pointerup") this.finishNavigationGesture(surface, gesture, event);
       return;
     }
-    surface.releasePointer(event.pointerId);
-    if (this.activeStroke) {
-      if (event.type === "pointerup") {
-        const finalPoint = surface.pointFromEvent(event);
-        const previous = this.activeStroke.points[this.activeStroke.points.length - 1];
-        if (!previous || shouldRecordSample(previous, finalPoint)) {
-          this.activeStroke.points.push(finalPoint);
-        }
-      }
-      this.activeStroke.points = simplifyStrokePoints(
-        this.activeStroke.points,
-        this.activeStroke.tool
-      );
-      this.drawPage(surface.pageNumber);
-      this.scheduleSave();
+    const gesture = this.annotationGesture;
+    if (!gesture || gesture.pointerId !== event.pointerId || gesture.surface !== surface) return;
+    if (gesture.stroke && event.type === "pointerup") {
+      const finalPoint = surface.pointFromEvent(event);
+      const previous = gesture.stroke.points[gesture.stroke.points.length - 1];
+      if (!previous || shouldRecordSample(previous, finalPoint)) gesture.stroke.points.push(finalPoint);
     }
-    this.activeStroke = null;
-    this.activePage = null;
+    this.finishAnnotation();
+  }
+
+  private finishAnnotation(): void {
+    const gesture = this.annotationGesture;
+    if (!gesture) return;
+    this.annotationGesture = null;
+    gesture.surface.releasePointer(gesture.pointerId);
+    if (!gesture.stroke) return;
+    gesture.stroke.points = simplifyStrokePoints(gesture.stroke.points, gesture.stroke.tool);
+    this.drawPage(gesture.surface.pageNumber);
+    this.scheduleSave();
   }
 
   private finishNavigationGesture(
@@ -698,7 +719,6 @@ export class BetterScoreView extends FileView {
     if (!strokeChanged && !textChanged) return;
     page.strokes = remainingStrokes;
     page.texts = remainingTexts;
-    this.activePage = pageNumber;
     this.drawPage(pageNumber);
     this.scheduleSave();
   }
@@ -895,6 +915,8 @@ export class BetterScoreView extends FileView {
   private async applyViewerLayout(state: ViewerState): Promise<void> {
     const manager = this.surfaceManager;
     if (!manager) return;
+    this.fingerPan?.reset();
+    this.finishAnnotation();
     const applied = await manager.setLayout(state);
     if (!applied || manager !== this.surfaceManager) return;
     const current = this.navigationController?.getState();
@@ -940,6 +962,8 @@ export class BetterScoreView extends FileView {
 
   private async destroyPdf(): Promise<void> {
     this.clearWheelZoom();
+    this.fingerPan?.dispose();
+    this.fingerPan = null;
     this.thumbnailStrip?.dispose();
     this.thumbnailStrip = null;
     this.surfaceManager?.dispose();

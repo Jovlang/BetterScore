@@ -5,6 +5,7 @@ export interface PageSurfacePointerHandlers {
   onPointerDown: (surface: PageSurface, event: PointerEvent) => void;
   onPointerMove: (surface: PageSurface, event: PointerEvent) => void;
   onPointerEnd: (surface: PageSurface, event: PointerEvent) => void;
+  onSurfaceDestroy?: (surface: PageSurface) => void;
 }
 
 export interface PageSurfaceGeometry {
@@ -63,6 +64,7 @@ export class PageSurface {
     this.overlay.addEventListener("pointermove", this.handlePointerMove);
     this.overlay.addEventListener("pointerup", this.handlePointerEnd);
     this.overlay.addEventListener("pointercancel", this.handlePointerEnd);
+    this.overlay.addEventListener("lostpointercapture", this.handlePointerEnd);
   }
 
   async renderPdf(): Promise<void> {
@@ -106,10 +108,6 @@ export class PageSurface {
     this.overlay.setPointerCapture(pointerId);
   }
 
-  hasPointerCapture(pointerId: number): boolean {
-    return this.overlay.hasPointerCapture(pointerId);
-  }
-
   releasePointer(pointerId: number): void {
     if (this.overlay.hasPointerCapture(pointerId)) {
       this.overlay.releasePointerCapture(pointerId);
@@ -119,6 +117,7 @@ export class PageSurface {
   destroy(): boolean {
     if (this.destroyed) return false;
     this.destroyed = true;
+    this.pointerHandlers.onSurfaceDestroy?.(this);
     const activeTask = this.renderTask;
     activeTask?.cancel?.();
     this.renderTask = null;
@@ -126,6 +125,7 @@ export class PageSurface {
     this.overlay.removeEventListener("pointermove", this.handlePointerMove);
     this.overlay.removeEventListener("pointerup", this.handlePointerEnd);
     this.overlay.removeEventListener("pointercancel", this.handlePointerEnd);
+    this.overlay.removeEventListener("lostpointercapture", this.handlePointerEnd);
     // Setting bitmap dimensions to zero releases browser/GPU backing stores.
     this.pdfCanvas.width = 0;
     this.pdfCanvas.height = 0;

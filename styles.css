@@ -125,7 +125,8 @@
   overflow: auto;
   padding: 16px;
   overscroll-behavior: contain;
-  touch-action: pan-y;
+  /* Scroll finger drags explicitly; native panning can also claim stylus input. */
+  touch-action: none;
 }
 
 .betterscore-pages.is-zoomed {
@@ -137,7 +138,6 @@
   flex-direction: row;
   justify-content: center;
   overflow: hidden;
-  touch-action: none;
 }
 
 .betterscore-pages.is-zoomed[data-view-mode="single"] {
@@ -152,7 +152,6 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   justify-items: stretch;
   overflow: hidden;
-  touch-action: none;
 }
 
 .betterscore-pages.is-zoomed[data-view-mode="spread"] {
@@ -184,6 +183,7 @@
   flex: 0 0 auto;
   overflow: hidden;
   position: relative;
+  touch-action: none;
 }
 
 .betterscore-page-placeholder:not(.is-mounted) {
@@ -203,16 +203,6 @@
 
 .betterscore-ink-canvas {
   cursor: crosshair;
-  touch-action: pan-y pinch-zoom;
-}
-
-.betterscore-pages[data-view-mode="single"] .betterscore-ink-canvas,
-.betterscore-pages[data-view-mode="spread"] .betterscore-ink-canvas {
-  touch-action: none;
-}
-
-.betterscore-view.is-finger-drawing .betterscore-pages,
-.betterscore-view.is-finger-drawing .betterscore-ink-canvas {
   touch-action: none;
 }
 
