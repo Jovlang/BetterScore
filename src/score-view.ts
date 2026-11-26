@@ -17,9 +17,10 @@ import {SaveCoordinator} from "./save-coordinator";
 import {NavigationChange, NavigationController} from "./navigation-controller";
 import {pageNavigationAction, routePointerInput} from "./input-router";
 import {FingerPan} from "./finger-pan";
+import {PinchZoom} from "./pinch-zoom";
 import {PageSurface} from "./page-surface";
 import {PageSurfaceManager} from "./page-surface-manager";
-import type {PageCacheOptions, PageSurfaceStats} from "./page-surface-manager";
+import type {PageCacheOptions, PageSurfaceStats, ZoomAnchor} from "./page-surface-manager";
 import {PdfExportController} from "./pdf-export-controller";
 import type {PdfDocument} from "./pdf-types";
 import {ThumbnailStrip} from "./thumbnail-strip";
@@ -90,6 +91,7 @@ export class BetterScoreView extends FileView {
   private readonly saveCoordinator: SaveCoordinator<PreparedAnnotationSave>;
   private annotationGesture: AnnotationGesture | null = null;
   private fingerPan: FingerPan | null = null;
+  private pinchZoom: PinchZoom | null = null;
   private toolbar: HTMLElement | null = null;
   private viewerBody: HTMLElement | null = null;
   private thumbnailPane: HTMLElement | null = null;
@@ -253,10 +255,18 @@ export class BetterScoreView extends FileView {
     this.viewerBody = this.contentEl.createDiv({cls: "betterscore-viewer-body"});
     this.thumbnailPane = this.viewerBody.createDiv({cls: "betterscore-thumbnail-pane"});
     this.scoreContainer = this.viewerBody.createDiv({cls: "betterscore-pages"});
-    this.fingerPan = new FingerPan(this.scoreContainer, () =>
-      this.navigationController?.getState().viewMode === "continuous"
-      && !this.getFingerDrawingEnabled()
-    );
+    this.fingerPan = new FingerPan(this.scoreContainer, () => this.canFingerPan());
+    this.pinchZoom = new PinchZoom(this.scoreContainer, (point) => {
+      if (this.getFingerDrawingEnabled() || this.annotationGesture) return null;
+      const session = this.surfaceManager?.startPinch(point, (zoom, anchor) => this.setZoom(zoom, anchor));
+      if (!session) return null;
+      this.clearWheelZoom();
+      this.fingerPan?.reset();
+      const navigation = this.navigationGesture;
+      this.navigationGesture = null;
+      navigation?.surface.releasePointer(navigation.pointerId);
+      return session;
+    });
     this.scoreContainer.createDiv({cls: "betterscore-loading", text: "Loading score…"});
 
     try {
@@ -398,7 +408,10 @@ export class BetterScoreView extends FileView {
   private updateFingerDrawingButton(): void {
     const enabled = this.getFingerDrawingEnabled();
     this.fingerDrawingButton?.toggleClass("is-active", enabled);
-    if (enabled) this.fingerPan?.reset();
+    if (enabled) {
+      this.fingerPan?.reset();
+      this.pinchZoom?.reset();
+    }
     const state = enabled ? "on" : "off";
     this.fingerDrawingButton?.setAttribute(
       "aria-label",
@@ -407,7 +420,7 @@ export class BetterScoreView extends FileView {
     this.fingerDrawingButton?.setAttribute(
       "title",
       enabled
-        ? "Finger drawing: on · Finger scrolling and page turns are disabled"
+        ? "Finger drawing: on · Finger scrolling, pinch zoom, and page turns are disabled"
         : "Finger drawing: off · Tap to draw with a finger"
     );
   }
@@ -417,10 +430,18 @@ export class BetterScoreView extends FileView {
     this.setZoom(current + delta);
   }
 
-  private setZoom(zoom: number): void {
+  private canFingerPan(): boolean {
+    return !this.getFingerDrawingEnabled() && (
+      this.navigationController?.getState().viewMode === "continuous"
+      || (this.surfaceManager?.getZoom() ?? 1) > 1
+    );
+  }
+
+  private setZoom(zoom: number, anchor?: ZoomAnchor): void {
     const manager = this.surfaceManager;
     if (!manager) return;
-    void manager.setZoom(zoom).then(() => {
+    if (!anchor) this.pinchZoom?.reset();
+    void manager.setZoom(zoom, anchor).then(() => {
       if (manager === this.surfaceManager) this.updateZoomButton();
     }).catch((error: unknown) => {
       new Notice(`BetterScore could not zoom: ${messageOf(error)}`);
@@ -624,6 +645,7 @@ export class BetterScoreView extends FileView {
   }
 
   private handlePointerDown(surface: PageSurface, event: PointerEvent): void {
+    if (event.pointerType === "touch" && this.canFingerPan()) return;
     const {pageNumber} = surface;
     const viewMode = this.navigationController?.getState().viewMode ?? "continuous";
     const intent = routePointerInput(
@@ -952,6 +974,7 @@ export class BetterScoreView extends FileView {
       this.scheduleSave();
     }
     if (change.cause === "viewport") return;
+    this.pinchZoom?.reset();
     if (change.state.viewMode === "continuous" && this.renderedViewMode === "continuous") {
       this.surfaceManager?.scrollToPage(change.state.currentPage, "auto");
       return;
@@ -1009,6 +1032,8 @@ export class BetterScoreView extends FileView {
 
   private async destroyPdf(): Promise<void> {
     this.clearWheelZoom();
+    this.pinchZoom?.dispose();
+    this.pinchZoom = null;
     this.fingerPan?.dispose();
     this.fingerPan = null;
     this.thumbnailStrip?.dispose();

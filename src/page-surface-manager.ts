@@ -7,6 +7,7 @@ import {
   pagesForRenderWindow
 } from "./viewer-layout";
 import type {ViewerState, ViewMode} from "./viewer-layout";
+import type {PinchSession} from "./pinch-zoom";
 
 const OBSERVER_ROOT_MARGIN = "200% 0px";
 const MAX_CONCURRENT_RENDERS = 2;
@@ -57,6 +58,14 @@ export interface PageSurfaceManagerCallbacks extends PageSurfacePointerHandlers 
 interface QueuedRender {
   pageNumber: number;
   generation: number;
+}
+
+export interface ZoomAnchor {
+  page: number;
+  x: number;
+  y: number;
+  clientX: number;
+  clientY: number;
 }
 
 export class PageSurfaceManager {
@@ -217,12 +226,73 @@ export class PageSurfaceManager {
     return this.zoom;
   }
 
-  async setZoom(zoom: number): Promise<number> {
+  /** Preview with existing canvases; rebuild them sharply just once, on release. */
+  startPinch(
+    point: {x: number; y: number},
+    commit: (zoom: number, anchor: ZoomAnchor) => void
+  ): PinchSession | null {
+    const viewport = this.container.getBoundingClientRect();
+    const visible: {slot: HTMLElement; x: number; y: number}[] = [];
+    const paged = this.layoutState.viewMode === "continuous"
+      ? null : new Set(pagesForLayout(this.layoutState, this.pdf.numPages));
+    let anchor: ZoomAnchor | undefined;
+    let nearest = Infinity;
+    for (const [page, slot] of this.slots) {
+      if (paged && !paged.has(page)) continue;
+      const bounds = slot.getBoundingClientRect();
+      if (!bounds.width || !bounds.height || bounds.bottom <= viewport.top ||
+          bounds.top >= viewport.bottom || bounds.right <= viewport.left ||
+          bounds.left >= viewport.right) continue;
+      const x = point.x - bounds.left;
+      const y = point.y - bounds.top;
+      visible.push({slot, x, y});
+      const withinX = Math.max(0, Math.min(x, bounds.width));
+      const withinY = Math.max(0, Math.min(y, bounds.height));
+      const distance = Math.hypot(x - withinX, y - withinY);
+      if (distance < nearest) {
+        nearest = distance;
+        anchor = {
+          page, x: withinX / bounds.width, y: withinY / bounds.height,
+          clientX: bounds.left + withinX, clientY: bounds.top + withinY
+        };
+      }
+    }
+    if (!anchor) return null;
+    const startZoom = this.zoom;
+    const revision = this.layoutRevision;
+    return {
+      preview: (scale) => {
+        const ratio = clampZoom(startZoom * scale) / startZoom;
+        for (const {slot, x, y} of visible) {
+          slot.style.transformOrigin = `${x}px ${y}px`;
+          slot.style.transform = `scale(${ratio})`;
+        }
+      },
+      finish: (scale) => {
+        for (const {slot} of visible) {
+          slot.style.transform = "";
+          slot.style.transformOrigin = "";
+        }
+        if (scale !== null && revision === this.layoutRevision) {
+          commit(clampZoom(startZoom * scale), anchor);
+        }
+      }
+    };
+  }
+
+  async setZoom(zoom: number, anchor?: ZoomAnchor): Promise<number> {
     const normalized = clampZoom(zoom);
     if (normalized === this.zoom) return this.zoom;
     this.zoom = normalized;
     this.updateZoomClass();
-    await this.setLayout(this.layoutState, true);
+    const applied = await this.setLayout(this.layoutState, true);
+    if (applied && anchor) {
+      const bounds = this.slots.get(anchor.page)?.getBoundingClientRect();
+      if (bounds?.width && bounds.height) {
+        this.container.scrollLeft += bounds.left + bounds.width * anchor.x - anchor.clientX;
+        this.container.scrollTop += bounds.top + bounds.height * anchor.y - anchor.clientY;
+      }
+    }
     return this.zoom;
   }
 

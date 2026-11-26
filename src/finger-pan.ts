@@ -1,6 +1,6 @@
-/** Scroll the continuous viewport without letting the browser pan a Pencil contact. */
+/** Scroll the viewport without letting the browser pan a Pencil contact. */
 export class FingerPan {
-  private gesture: {pointerId: number; lastY: number; dragging: boolean} | null = null;
+  private gesture: {pointerId: number; lastX: number; lastY: number; dragging: boolean} | null = null;
 
   constructor(
     private readonly viewport: HTMLElement,
@@ -33,7 +33,7 @@ export class FingerPan {
   private readonly down = (event: PointerEvent): void => {
     if (event.pointerType !== "touch" || this.gesture || !this.enabled()) return;
     this.viewport.setPointerCapture(event.pointerId);
-    this.gesture = {pointerId: event.pointerId, lastY: event.clientY, dragging: false};
+    this.gesture = {pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, dragging: false};
   };
 
   private readonly move = (event: PointerEvent): void => {
@@ -43,11 +43,14 @@ export class FingerPan {
       this.reset();
       return;
     }
-    const delta = gesture.lastY - event.clientY;
-    if (!gesture.dragging && Math.abs(delta) < 4) return;
+    const dx = gesture.lastX - event.clientX;
+    const dy = gesture.lastY - event.clientY;
+    if (!gesture.dragging && Math.hypot(dx, dy) < 4) return;
     gesture.dragging = true;
+    gesture.lastX = event.clientX;
     gesture.lastY = event.clientY;
-    this.viewport.scrollTop += delta;
+    this.viewport.scrollLeft += dx;
+    this.viewport.scrollTop += dy;
   };
 
   private readonly end = (event: PointerEvent): void => {

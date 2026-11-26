@@ -4,14 +4,15 @@ import {FingerPan} from "../src/finger-pan";
 
 class TestViewport extends EventTarget {
   scrollTop = 100;
+  scrollLeft = 100;
   captured: number | null = null;
 
   setPointerCapture(id: number): void { this.captured = id; }
   hasPointerCapture(id: number): boolean { return this.captured === id; }
   releasePointerCapture(): void { this.captured = null; }
 
-  pointer(type: string, pointerId: number, clientY: number, pointerType = "touch"): void {
-    this.dispatchEvent(Object.assign(new Event(type), {pointerId, clientY, pointerType}));
+  pointer(type: string, pointerId: number, clientY: number, pointerType = "touch", clientX = 0): void {
+    this.dispatchEvent(Object.assign(new Event(type), {pointerId, clientX, clientY, pointerType}));
   }
 }
 
@@ -34,6 +35,16 @@ test("only the initiating finger scrolls, even with interleaved Pencil events", 
   assert.equal(viewport.scrollTop, 125);
   viewport.pointer("pointerup", 20, 175);
   assert.equal(viewport.captured, null);
+  pan.dispose();
+});
+
+test("one finger can pan horizontally on a zoomed score", () => {
+  const viewport = new TestViewport();
+  const pan = new FingerPan(viewport as unknown as HTMLElement, () => true);
+  viewport.pointer("pointerdown", 1, 200, "touch", 60);
+  viewport.pointer("pointermove", 1, 200, "touch", 30);
+  assert.equal(viewport.scrollLeft, 130);
+  assert.equal(viewport.scrollTop, 100);
   pan.dispose();
 });
 
