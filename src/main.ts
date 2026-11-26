@@ -15,8 +15,11 @@ import {
   BetterScoreSettings,
   DESKTOP_CACHE_BUDGETS_MB,
   EraserMode,
+  getInkStyle,
+  InkStyle,
   normalizeSettings
 } from "./settings";
+import type {AnnotationTool} from "./model";
 import type {PageCacheOptions} from "./page-surface-manager";
 import {rememberReadingPosition, restoreReadingPosition} from "./reading-position";
 import {SaveCoordinator} from "./save-coordinator";
@@ -37,8 +40,8 @@ export default class BetterScorePlugin extends Plugin {
       VIEW_TYPE_BETTERSCORE,
       (leaf) => new BetterScoreView(
         leaf,
-        () => this.pluginSettings.highlighterWidth,
-        (width) => this.setHighlighterWidth(width),
+        (tool) => getInkStyle(this.pluginSettings, tool),
+        (tool, change) => this.setInkStyle(tool, change),
         () => this.pluginSettings.eraserMode,
         (mode) => this.setEraserMode(mode),
         () => this.pluginSettings.fingerDrawingEnabled,
@@ -232,11 +235,17 @@ export default class BetterScorePlugin extends Plugin {
     );
   }
 
-  private async setHighlighterWidth(width: number): Promise<void> {
+  private async setInkStyle(tool: AnnotationTool, change: Partial<InkStyle>): Promise<void> {
+    const style = {...getInkStyle(this.pluginSettings, tool), ...change};
     this.pluginSettings = normalizeSettings({
       ...this.pluginSettings,
-      highlighterWidth: width
+      ...(tool === "pen"
+        ? {penColor: style.color, penWidth: style.width}
+        : {highlighterColor: style.color, highlighterWidth: style.width})
     });
+    for (const {view} of this.app.workspace.getLeavesOfType(VIEW_TYPE_BETTERSCORE)) {
+      if (view instanceof BetterScoreView) view.refreshInkStyleButtons();
+    }
     await this.persistSettings();
   }
 

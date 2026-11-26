@@ -13,7 +13,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Incremental continuous startup that loads only the active page geometry before first render
 - Mouse, stylus, and Apple Pencil annotation input
 - Pressure-sensitive pen
-- Semi-transparent yellow marker with a persistent right-click width menu
+- Semi-transparent marker; independent, persistent color and width presets for pen and marker
 - Positioned multiline text annotations
 - Stroke eraser
 - Persistent stroke and precision eraser modes from the Eraser button's right-click menu
@@ -50,6 +50,8 @@ BetterScore is in active beta development. Its core reader, annotation, navigati
 4. Enable BetterScore under **Settings → Community plugins** in Obsidian.
 
 Right-click a PDF and choose **Open in BetterScore**, or open a PDF and run **BetterScore: Open active PDF in BetterScore** from the command palette.
+
+Select **Pen** or **Marker**, then click or tap the **palette** button to choose its color and width. On desktop, you can also right-click either tool directly. Changes apply to new strokes only.
 
 ## Development
 

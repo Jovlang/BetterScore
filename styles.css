@@ -39,9 +39,9 @@
   margin: 8px 4px;
 }
 
-.betterscore-marker-swatch {
-  background: rgb(255 214 10 / 55%);
-  border: 1px solid rgb(180 140 0 / 55%);
+.betterscore-ink-swatch {
+  background: var(--betterscore-ink-color);
+  border: 1px solid var(--background-modifier-border-hover);
   border-radius: 2px;
   display: inline-block;
   height: 12px;

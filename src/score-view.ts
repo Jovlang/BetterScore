@@ -37,9 +37,10 @@ import {
 } from "./model";
 import {createSourceIdentity} from "./source-identity";
 import {
-  HIGHLIGHTER_WIDTH_PRESETS,
   EraserMode,
-  highlighterWidthLabel,
+  INK_PRESETS,
+  InkStyle,
+  inkWidthLabel,
   nearlyEqual
 } from "./settings";
 
@@ -97,7 +98,7 @@ export class BetterScoreView extends FileView {
   private thumbnailsOpen = false;
   private undoButton: HTMLButtonElement | null = null;
   private redoButton: HTMLButtonElement | null = null;
-  private markerButton: HTMLButtonElement | null = null;
+  private inkStyleButton: HTMLButtonElement | null = null;
   private eraserButton: HTMLButtonElement | null = null;
   private fingerDrawingButton: HTMLButtonElement | null = null;
   private thumbnailButton: HTMLButtonElement | null = null;
@@ -110,8 +111,8 @@ export class BetterScoreView extends FileView {
 
   constructor(
     leaf: WorkspaceLeaf,
-    private readonly getHighlighterWidth: () => number,
-    private readonly setHighlighterWidth: (width: number) => Promise<void>,
+    private readonly getInkStyle: (tool: AnnotationTool) => InkStyle,
+    private readonly setInkStyle: (tool: AnnotationTool, change: Partial<InkStyle>) => Promise<void>,
     private readonly getEraserMode: () => EraserMode,
     private readonly setEraserMode: (mode: EraserMode) => Promise<void>,
     private readonly getFingerDrawingEnabled: () => boolean,
@@ -348,11 +349,20 @@ export class BetterScoreView extends FileView {
     this.addActionButton("zoom-in", "Zoom in", "Ctrl/⌘ +", () => this.zoomIn());
     this.toolbar.createDiv({cls: "betterscore-toolbar-divider"});
     this.addToolButton("pencil", "Pen", "pen");
-    this.markerButton = this.addToolButton("highlighter", "Yellow marker", "highlighter");
-    this.updateMarkerButton();
-    this.markerButton?.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      this.showMarkerWidthMenu(event);
+    this.addToolButton("highlighter", "Marker", "highlighter");
+    this.inkStyleButton = this.toolbar.createEl("button", {
+      cls: "clickable-icon betterscore-ink-style",
+      attr: {type: "button", "aria-haspopup": "menu"}
+    });
+    setIcon(this.inkStyleButton, "palette");
+    const inkStyleButton = this.inkStyleButton;
+    inkStyleButton.addEventListener("click", () => {
+      if (this.tool !== "pen" && this.tool !== "highlighter") return;
+      const rect = inkStyleButton.getBoundingClientRect();
+      this.createInkStyleMenu(this.tool).showAtPosition(
+        {x: rect.left, y: rect.bottom},
+        inkStyleButton.ownerDocument
+      );
     });
     this.addToolButton("type", "Text", "text");
     this.eraserButton = this.addToolButton("eraser", "Eraser", "eraser");
@@ -499,8 +509,12 @@ export class BetterScoreView extends FileView {
     });
     if (!button) return null;
     setIcon(button, icon);
-    if (tool === "highlighter") {
-      button.createSpan({cls: "betterscore-marker-swatch"});
+    if (tool === "pen" || tool === "highlighter") {
+      button.createSpan({cls: "betterscore-ink-swatch", attr: {"aria-hidden": "true"}});
+      button.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        this.createInkStyleMenu(tool).showAtMouseEvent(event);
+      });
     }
     button.addEventListener("click", () => {
       this.tool = tool;
@@ -509,32 +523,47 @@ export class BetterScoreView extends FileView {
     return button;
   }
 
-  private showMarkerWidthMenu(event: MouseEvent): void {
-    const current = this.getHighlighterWidth();
+  private createInkStyleMenu(tool: AnnotationTool): Menu {
+    const style = this.getInkStyle(tool);
+    const presets = INK_PRESETS[tool];
     const menu = new Menu();
-    for (const preset of HIGHLIGHTER_WIDTH_PRESETS) {
-      menu.addItem((item) => {
-        item
-          .setTitle(preset.label)
-          .setChecked(nearlyEqual(current, preset.width))
-          .onClick(async () => {
-            await this.setHighlighterWidth(preset.width);
-            this.updateMarkerButton();
-          });
-      });
+    for (const preset of presets.colors) {
+      menu.addItem((item) => item
+        .setTitle(`${presets.label} color: ${preset.label}`)
+        .setChecked(style.color === preset.color)
+        .onClick(() => this.setInkStyle(tool, {color: preset.color})));
     }
-    menu.showAtMouseEvent(event);
+    menu.addSeparator();
+    for (const preset of presets.widths) {
+      menu.addItem((item) => item
+        .setTitle(`${presets.label} width: ${preset.label}`)
+        .setChecked(nearlyEqual(style.width, preset.width))
+        .onClick(() => this.setInkStyle(tool, {width: preset.width})));
+    }
+    return menu;
   }
 
-  private updateMarkerButton(): void {
-    if (!this.markerButton) return;
-    const width = this.getHighlighterWidth();
-    const label = highlighterWidthLabel(width);
-    this.markerButton.setAttribute(
-      "aria-label",
-      `Yellow marker · ${label}. Right-click to set width.`
-    );
-    this.markerButton.setAttribute("title", `Marker width: ${label} · Right-click to change`);
+  refreshInkStyleButtons(): void {
+    for (const tool of ["pen", "highlighter"] as const) {
+      const button = this.toolbar?.querySelector<HTMLButtonElement>(`[data-tool="${tool}"]`);
+      if (!button) continue;
+      const {color, width} = this.getInkStyle(tool);
+      const presets = INK_PRESETS[tool];
+      const colorLabel = presets.colors.find((preset) => preset.color === color)?.label;
+      const label = `${presets.label} · ${colorLabel ?? color} · ${inkWidthLabel(tool, width)}`;
+      button.style.setProperty("--betterscore-ink-color", color);
+      button.setAttribute("aria-label", label);
+      button.title = `${label} · Right-click for color and width`;
+    }
+    if (this.inkStyleButton) {
+      const inkTool = this.tool === "pen" || this.tool === "highlighter" ? this.tool : null;
+      const label = inkTool
+        ? `${INK_PRESETS[inkTool].label} color and width`
+        : "Select Pen or Marker to change color and width";
+      this.inkStyleButton.disabled = inkTool === null;
+      this.inkStyleButton.setAttribute("aria-label", label);
+      this.inkStyleButton.title = label;
+    }
   }
 
   private showEraserModeMenu(event: MouseEvent): void {
@@ -587,8 +616,11 @@ export class BetterScoreView extends FileView {
 
   private updateToolButtons(): void {
     this.toolbar?.querySelectorAll<HTMLElement>("[data-tool]").forEach((button) => {
-      button.toggleClass("is-active", button.dataset.tool === this.tool);
+      const active = button.dataset.tool === this.tool;
+      button.toggleClass("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
     });
+    this.refreshInkStyleButtons();
   }
 
   private handlePointerDown(surface: PageSurface, event: PointerEvent): void {
@@ -638,9 +670,8 @@ export class BetterScoreView extends FileView {
     gesture.stroke = {
       id: crypto.randomUUID(),
       tool: this.tool,
-      color: this.tool === "highlighter" ? "#ffd60a" : "#e53935",
+      ...this.getInkStyle(this.tool),
       opacity: this.tool === "highlighter" ? 0.2 : 0.92,
-      width: this.tool === "highlighter" ? this.getHighlighterWidth() : 0.0045,
       points: [point]
     };
     this.page(pageNumber).strokes.push(gesture.stroke);
