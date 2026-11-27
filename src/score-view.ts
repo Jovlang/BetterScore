@@ -255,7 +255,7 @@ export class BetterScoreView extends FileView {
     this.viewerBody = this.contentEl.createDiv({cls: "betterscore-viewer-body"});
     this.thumbnailPane = this.viewerBody.createDiv({cls: "betterscore-thumbnail-pane"});
     this.scoreContainer = this.viewerBody.createDiv({cls: "betterscore-pages"});
-    this.fingerPan = new FingerPan(this.scoreContainer, () => this.canFingerPan());
+    this.fingerPan = new FingerPan(this.scoreContainer, () => this.canFingerPan(), () => !this.annotationGesture);
     this.pinchZoom = new PinchZoom(this.scoreContainer, (point) => {
       if (this.getFingerDrawingEnabled() || this.annotationGesture) return null;
       const session = this.surfaceManager?.startPinch(point, (zoom, anchor) => this.setZoom(zoom, anchor));
@@ -440,7 +440,10 @@ export class BetterScoreView extends FileView {
   private setZoom(zoom: number, anchor?: ZoomAnchor): void {
     const manager = this.surfaceManager;
     if (!manager) return;
-    if (!anchor) this.pinchZoom?.reset();
+    if (!anchor) {
+      this.fingerPan?.reset();
+      this.pinchZoom?.reset();
+    }
     void manager.setZoom(zoom, anchor).then(() => {
       if (manager === this.surfaceManager) this.updateZoomButton();
     }).catch((error: unknown) => {
@@ -976,6 +979,7 @@ export class BetterScoreView extends FileView {
     if (change.cause === "viewport") return;
     this.pinchZoom?.reset();
     if (change.state.viewMode === "continuous" && this.renderedViewMode === "continuous") {
+      this.fingerPan?.reset();
       this.surfaceManager?.scrollToPage(change.state.currentPage, "auto");
       return;
     }
