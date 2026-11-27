@@ -36,6 +36,7 @@ The original PDF is never modified. BetterScore stores normalized annotation str
 - Optional high-memory desktop cache that retains recently rendered pages across background tabs
 - Sharp, centered 50–300% zoom with keyboard shortcuts, Ctrl+wheel, and bounded canvas dimensions
 - Two-finger pinch zoom on iPad in continuous, single-page, and spread modes. Turn off **Draw with finger** to use it. At magnifications above 100%, drag with one finger to pan; use the toolbar arrows to turn pages in single-page or spread mode.
+- Fullscreen performance mode from the toolbar or command palette: keeps Pencil annotation available, leaves audio playback alone, and requests screen wake lock where supported.
 - A lazy, low-resolution thumbnail strip with current-page tracking
 - Non-destructive flattened PDF export to a new sibling file
 - Explicit memory warning before large flattened exports

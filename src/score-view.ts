@@ -16,6 +16,7 @@ import {shouldRecordSample, simplifyStrokePoints} from "./simplify";
 import {SaveCoordinator} from "./save-coordinator";
 import {NavigationChange, NavigationController} from "./navigation-controller";
 import {pageNavigationAction, routePointerInput} from "./input-router";
+import {PerformanceWakeLock} from "./performance-wake-lock";
 import {FingerPan} from "./finger-pan";
 import {PinchZoom} from "./pinch-zoom";
 import {PageSurface} from "./page-surface";
@@ -92,6 +93,14 @@ export class BetterScoreView extends FileView {
   private annotationGesture: AnnotationGesture | null = null;
   private fingerPan: FingerPan | null = null;
   private pinchZoom: PinchZoom | null = null;
+  private performanceMode = false;
+  private pendingPerformanceToggle = false;
+  private performanceFrame: number | null = null;
+  private performanceButton: HTMLButtonElement | null = null;
+  private exitPerformanceButton: HTMLButtonElement | null = null;
+  private readonly wakeLock = new PerformanceWakeLock(async () =>
+    this.contentEl.ownerDocument.defaultView?.navigator.wakeLock?.request("screen")
+  );
   private toolbar: HTMLElement | null = null;
   private viewerBody: HTMLElement | null = null;
   private thumbnailPane: HTMLElement | null = null;
@@ -136,9 +145,17 @@ export class BetterScoreView extends FileView {
       (event) => this.handleZoomWheel(event),
       {passive: false}
     );
-    this.registerDomEvent(document, "visibilitychange", () => {
-      if (document.visibilityState === "hidden") void this.flushSave();
+    const doc = this.contentEl.ownerDocument;
+    this.registerDomEvent(doc, "visibilitychange", () => {
+      if (doc.visibilityState === "hidden") void this.flushSave();
+      this.updatePerformanceWakeLock();
     });
+    for (const event of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
+      this.registerDomEvent(doc, event, () => this.schedulePerformanceToggle(), {capture: true});
+    }
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (activeLeaf) => {
+      if (activeLeaf && activeLeaf !== leaf) this.exitPerformanceMode();
+    }));
   }
 
   getViewType(): string {
@@ -202,6 +219,63 @@ export class BetterScoreView extends FileView {
     });
   }
 
+  canTogglePerformanceMode(): boolean {
+    return this.performanceMode || (this.readingFingerprint !== null && this.surfaceManager !== null);
+  }
+
+  togglePerformanceMode(): void {
+    if (!this.canTogglePerformanceMode()) return;
+    this.pendingPerformanceToggle = !this.pendingPerformanceToggle;
+    this.applyPendingPerformanceToggle();
+  }
+
+  exitPerformanceMode(restoreLayout = true): void {
+    this.pendingPerformanceToggle = false;
+    if (this.performanceFrame !== null) window.cancelAnimationFrame(this.performanceFrame);
+    this.performanceFrame = null;
+    this.setPerformanceMode(false, restoreLayout);
+  }
+
+  private schedulePerformanceToggle(): void {
+    if (!this.pendingPerformanceToggle || this.performanceFrame !== null) return;
+    this.performanceFrame = window.requestAnimationFrame(() => {
+      this.performanceFrame = null;
+      this.applyPendingPerformanceToggle();
+    });
+  }
+
+  private applyPendingPerformanceToggle(): void {
+    if (!this.pendingPerformanceToggle || this.annotationGesture || this.pinchZoom?.isActive ||
+        this.navigationGesture) return;
+    this.pendingPerformanceToggle = false;
+    this.setPerformanceMode(!this.performanceMode);
+  }
+
+  private updatePerformanceWakeLock(): void {
+    this.wakeLock.setWanted(this.performanceMode &&
+      this.contentEl.ownerDocument.visibilityState === "visible");
+  }
+
+  private setPerformanceMode(enabled: boolean, restoreLayout = true): void {
+    if (this.performanceMode === enabled) return;
+    const manager = this.surfaceManager;
+    const anchor = restoreLayout ? manager?.captureViewportAnchor() : undefined;
+    this.fingerPan?.reset();
+    this.clearWheelZoom();
+    this.performanceMode = enabled;
+    this.contentEl.toggleClass("betterscore-performance", enabled);
+    this.scoreContainer?.toggleClass("betterscore-performance-pages", enabled);
+    if (this.exitPerformanceButton) this.exitPerformanceButton.hidden = !enabled;
+    this.updatePerformanceWakeLock();
+    if (restoreLayout) {
+      manager?.resizeViewport(anchor);
+      const button = enabled ? this.exitPerformanceButton : this.performanceButton;
+      if (enabled || this.app.workspace.getActiveViewOfType(BetterScoreView) === this) {
+        button?.focus({preventScroll: true});
+      }
+    }
+  }
+
   zoomIn(): void {
     this.changeZoom(0.25);
   }
@@ -224,6 +298,7 @@ export class BetterScoreView extends FileView {
   }
 
   async onUnloadFile(file: TFile): Promise<void> {
+    this.exitPerformanceMode(false);
     this.finishAnnotation();
     this.readingFingerprint = null;
     await Promise.all([this.flushSave(), this.readingPositions.flush()]);
@@ -232,6 +307,7 @@ export class BetterScoreView extends FileView {
   }
 
   async onClose(): Promise<void> {
+    this.exitPerformanceMode(false);
     this.finishAnnotation();
     this.readingFingerprint = null;
     await Promise.all([this.disposeSaveCoordinator(), this.readingPositions.flush()]);
@@ -252,6 +328,13 @@ export class BetterScoreView extends FileView {
     this.contentEl.empty();
     this.contentEl.addClass("betterscore-view");
     this.renderToolbar();
+    this.exitPerformanceButton = this.contentEl.createEl("button", {
+      cls: "betterscore-performance-exit",
+      attr: {type: "button", "aria-label": "Exit fullscreen", title: "Exit fullscreen"}
+    });
+    this.exitPerformanceButton.hidden = true;
+    setIcon(this.exitPerformanceButton, "minimize");
+    this.exitPerformanceButton.addEventListener("click", () => this.togglePerformanceMode());
     this.viewerBody = this.contentEl.createDiv({cls: "betterscore-viewer-body"});
     this.thumbnailPane = this.viewerBody.createDiv({cls: "betterscore-thumbnail-pane"});
     this.scoreContainer = this.viewerBody.createDiv({cls: "betterscore-pages"});
@@ -338,6 +421,8 @@ export class BetterScoreView extends FileView {
 
   private renderToolbar(): void {
     this.toolbar = this.contentEl.createDiv({cls: "betterscore-toolbar"});
+    this.performanceButton = this.addActionButton("maximize", "Enter fullscreen", "",
+      () => this.togglePerformanceMode());
     this.viewModeButtons.clear();
     this.addViewModeButton("rows-3", "Continuous", "continuous");
     this.addViewModeButton("rectangle-horizontal", "Single page", "single");
@@ -869,6 +954,12 @@ export class BetterScoreView extends FileView {
     if (this.handleHistoryShortcut(event)) return;
     if (this.app.workspace.getActiveViewOfType(BetterScoreView) !== this) return;
     if (isTextInput(event.target)) return;
+    if (event.key === "Escape" && this.performanceMode && !event.defaultPrevented &&
+        !this.contentEl.ownerDocument.querySelector(".modal-container, .menu")) {
+      event.preventDefault();
+      if (!this.pendingPerformanceToggle) this.togglePerformanceMode();
+      return;
+    }
     if (this.handleZoomShortcut(event)) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
 

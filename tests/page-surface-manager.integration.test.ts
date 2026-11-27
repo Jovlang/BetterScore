@@ -150,6 +150,24 @@ for (const viewMode of ["continuous", "single", "spread"] as const) {
       assert.equal(bitmap.width, 0, "the superseded bitmap must release its backing store");
       assert.equal(slot.children[1], ink);
       assert.equal(manager.getCurrentPage(), 1);
+
+      const anchor = manager.captureViewportAnchor();
+      container.clientWidth += 128;
+      container.clientHeight += 128;
+      container.classes.add("betterscore-performance-pages");
+      manager.resizeViewport(anchor);
+      await flush();
+      assert.equal(container.children.find((child) => child.dataset.page === "1"), slot);
+      assert.equal(slot.children[0], replacement, "resize must keep the current bitmap until ready");
+      assert.equal(slot.children[1], ink);
+      assert.equal(manager.getZoom(), 2);
+      assert.equal(manager.getCurrentPage(), 1);
+
+      const pendingCount = pending.length;
+      assert.equal(pendingCount, viewMode === "spread" ? 2 : 1);
+      manager.resizeViewport();
+      await flush();
+      assert.equal(pending.length, pendingCount, "unchanged viewport must not enqueue another render");
     } finally {
       manager.dispose();
       defer = false;
@@ -172,6 +190,7 @@ class FakeElement {
   readonly dataset: Record<string, string> = {};
   readonly style: Record<string, string> = {};
   readonly classes = new Set<string>();
+  readonly classList = {contains: (name: string) => this.classes.has(name)};
   scrollTop = 0;
   scrollLeft = 0;
   width = 0;
@@ -204,7 +223,7 @@ class FakeElement {
   }
   parent: FakeElement | null = null;
 
-  constructor(readonly clientWidth = 0, readonly clientHeight = 0) {}
+  constructor(public clientWidth = 0, public clientHeight = 0) {}
 
   createDiv(options?: {cls?: string}): FakeElement {
     const child = new FakeElement();

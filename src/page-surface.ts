@@ -57,15 +57,19 @@ export class PageSurface {
   get cssWidth(): number { return this.geometry.cssViewport.width; }
   get cssHeight(): number { return this.geometry.cssViewport.height; }
 
-  resize(cssScale: number, renderScale: number, pixelRatio: number): void {
-    this.geometry = {
-      cssViewport: this.page.getViewport({scale: cssScale}),
-      renderViewport: this.page.getViewport({scale: renderScale}),
-      pixelRatio
-    };
+  resize(cssScale: number, renderScale: number, pixelRatio: number): boolean {
+    const cssViewport = this.page.getViewport({scale: cssScale});
+    const renderViewport = this.page.getViewport({scale: renderScale});
+    if (this.geometry.pixelRatio === pixelRatio &&
+        this.geometry.cssViewport.width === cssViewport.width &&
+        this.geometry.cssViewport.height === cssViewport.height &&
+        this.geometry.renderViewport.width === renderViewport.width &&
+        this.geometry.renderViewport.height === renderViewport.height) return false;
+    this.geometry = {cssViewport, renderViewport, pixelRatio};
     this.rendered = false;
     this.renderTask?.cancel?.();
     this.sizeCanvases();
+    return true;
   }
 
   private sizeCanvases(): void {

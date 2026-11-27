@@ -28,6 +28,8 @@ export class PinchZoom {
     for (const event of EVENTS) viewport.addEventListener(event, this.handle, CAPTURE);
   }
 
+  get isActive(): boolean { return this.active !== null; }
+
   reset(): void {
     this.complete(null);
     for (const id of this.captured) {

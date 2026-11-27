@@ -89,6 +89,8 @@ export class PageSurfaceManager {
   private layoutGeneration = 0;
   private layoutRevision = 0;
   private scrollFrame: number | null = null;
+  private readonly resizeObserver: ResizeObserver | null;
+  private viewportSize = "";
   private resizeFrame: number | null = null;
   private accessSequence = 0;
   private disposed = false;
@@ -103,6 +105,10 @@ export class PageSurfaceManager {
       maxCanvasBytes: 0
     }
   ) {
+    this.viewportSize = this.viewportKey();
+    this.resizeObserver = typeof ResizeObserver === "undefined" ? null
+      : new ResizeObserver(this.handleResize);
+    this.resizeObserver?.observe(container);
     window.addEventListener("resize", this.handleResize, {passive: true});
   }
 
@@ -394,6 +400,7 @@ export class PageSurfaceManager {
     this.disposed = true;
     this.layoutGeneration += 1;
     this.layoutRevision += 1;
+    this.resizeObserver?.disconnect();
     window.removeEventListener("resize", this.handleResize);
     if (this.resizeFrame !== null) window.cancelAnimationFrame(this.resizeFrame);
     this.resizeFrame = null;
@@ -579,7 +586,8 @@ export class PageSurfaceManager {
       );
     }
     const columns = mode === "spread" ? 2 : 1;
-    const padding = this.container.clientWidth <= 600 ? 16 : 32;
+    const padding = this.container.classList.contains("betterscore-performance-pages")
+      ? 0 : this.container.clientWidth <= 600 ? 16 : 32;
     const gap = this.container.clientWidth <= 600 ? 8 : 16;
     const totalWidth = Math.max(160, this.container.clientWidth - padding);
     const availableWidth = columns === 2 ? Math.max(80, (totalWidth - gap) / 2) : totalWidth;
@@ -798,7 +806,8 @@ export class PageSurfaceManager {
   }
 
   private availableContinuousWidth(): number {
-    return Math.max(320, this.container.clientWidth - 32);
+    const padding = this.container.classList.contains("betterscore-performance-pages") ? 0 : 32;
+    return Math.max(160, this.container.clientWidth - padding);
   }
 
   private pixelRatio(): number {
@@ -817,11 +826,63 @@ export class PageSurfaceManager {
     this.scheduleCurrentPageUpdate();
   };
 
+  /** Keep the point on the active page nearest the center of the old viewport. */
+  captureViewportAnchor(): ZoomAnchor | undefined {
+    const slot = this.slots.get(this.currentPage)?.getBoundingClientRect();
+    const viewport = this.container.getBoundingClientRect();
+    if (!slot?.width || !slot.height || !viewport.width || !viewport.height) return;
+    const x = Math.min(1, Math.max(0, (viewport.left + viewport.width / 2 - slot.left) / slot.width));
+    const y = Math.min(1, Math.max(0, (viewport.top + viewport.height / 2 - slot.top) / slot.height));
+    return {page: this.currentPage, x, y, clientX: 0, clientY: 0};
+  }
+
+  private viewportKey(): string {
+    return [this.container.clientWidth, this.container.clientHeight, this.pixelRatio(),
+      this.container.classList.contains("betterscore-performance-pages")].join(":");
+  }
+
+  resizeViewport(anchor = this.captureViewportAnchor()): void {
+    if (this.disposed || !this.container.clientWidth || !this.container.clientHeight) return;
+    const key = this.viewportKey();
+    if (key === this.viewportSize) return;
+    this.viewportSize = key;
+    const mode = this.layoutState.viewMode;
+    for (const [page, slot] of this.slots) {
+      const geometry = this.pageGeometry.get(page) ?? this.estimatedPageGeometry;
+      if (!geometry) continue;
+      const scales = this.scalesForPage(geometry, mode);
+      this.sizeSlot(slot, geometry, mode, scales, false);
+      const surface = this.surfaces.get(page);
+      if (surface?.resize(scales.cssScale, scales.renderScale, scales.pixelRatio)) {
+        this.callbacks.drawAnnotations(surface);
+      }
+    }
+    if (anchor && (mode === "continuous" || this.zoom > 1)) {
+      const viewport = this.container.getBoundingClientRect();
+      const slot = this.slots.get(anchor.page)?.getBoundingClientRect();
+      if (slot?.width && slot.height) {
+        this.container.scrollLeft += slot.left + slot.width * anchor.x - viewport.left - viewport.width / 2;
+        this.container.scrollTop += slot.top + slot.height * anchor.y - viewport.top - viewport.height / 2;
+      }
+    }
+    if (mode === "continuous") {
+      this.requestRender(this.currentPage, true);
+      for (const page of this.desiredPages) this.requestRender(page);
+      this.enforceRetainedCanvasBudget();
+      this.scheduleCurrentPageUpdate();
+    } else if (this.slots.size) {
+      // Re-evaluate the bounded prefetch window without resetting the layout.
+      void this.updatePagedLayout(this.layoutState).catch((error: unknown) => {
+        this.callbacks.onRenderError?.(this.currentPage, error);
+      });
+    }
+  }
+
   private readonly handleResize = (): void => {
     if (this.resizeFrame !== null || this.disposed) return;
     this.resizeFrame = window.requestAnimationFrame(() => {
       this.resizeFrame = null;
-      void this.setLayout(this.layoutState, true);
+      this.resizeViewport();
     });
   };
 }

@@ -178,6 +178,16 @@ export default class BetterScorePlugin extends Plugin {
       checkCallback: (checking) => this.withActiveScore(checking, (view) => view.zoomOut())
     });
     this.addCommand({
+      id: "toggle-performance-mode",
+      name: "Toggle fullscreen performance mode",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BetterScoreView);
+        if (!view?.canTogglePerformanceMode()) return false;
+        if (!checking) view.togglePerformanceMode();
+        return true;
+      }
+    });
+    this.addCommand({
       id: "reset-zoom",
       name: "Reset zoom",
       checkCallback: (checking) => this.withActiveScore(checking, (view) => view.resetZoom())
@@ -233,6 +243,12 @@ export default class BetterScorePlugin extends Plugin {
         });
       })
     );
+  }
+
+  onunload(): void {
+    for (const {view} of this.app.workspace.getLeavesOfType(VIEW_TYPE_BETTERSCORE)) {
+      if (view instanceof BetterScoreView) view.exitPerformanceMode();
+    }
   }
 
   private async setInkStyle(tool: AnnotationTool, change: Partial<InkStyle>): Promise<void> {

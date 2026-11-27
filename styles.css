@@ -262,3 +262,49 @@
     padding: 0 6px;
   }
 }
+
+/* In-app fullscreen: keep the original view and its canvases mounted. */
+.betterscore-view.betterscore-performance {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  width: auto;
+  height: auto;
+  --betterscore-safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --betterscore-safe-right: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
+  --betterscore-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  --betterscore-safe-left: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
+}
+
+.betterscore-performance > .betterscore-toolbar,
+.betterscore-performance .betterscore-thumbnail-pane {
+  display: none;
+}
+
+.betterscore-performance > .betterscore-viewer-body {
+  position: absolute;
+  inset: var(--betterscore-safe-top) var(--betterscore-safe-right)
+    var(--betterscore-safe-bottom) var(--betterscore-safe-left);
+  height: auto;
+}
+
+.betterscore-performance .betterscore-pages {
+  padding: 0;
+}
+
+.betterscore-performance-exit[hidden] {
+  display: none;
+}
+
+.betterscore-performance-exit:not([hidden]) {
+  position: absolute;
+  top: calc(var(--betterscore-safe-top) + 4px);
+  right: calc(var(--betterscore-safe-right) + 4px);
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: var(--radius-m);
+  color: var(--text-normal);
+  background: var(--background-primary);
+}
