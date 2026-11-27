@@ -17,11 +17,9 @@ export interface PageSurfaceGeometry {
 export class PageSurface {
   readonly overlay: HTMLCanvasElement;
   readonly annotationContext: CanvasRenderingContext2D;
-  readonly cssWidth: number;
-  readonly cssHeight: number;
-
-  private readonly pdfCanvas: HTMLCanvasElement;
-  private readonly pdfContext: CanvasRenderingContext2D;
+  private pdfCanvas: HTMLCanvasElement;
+  private pendingCanvas: HTMLCanvasElement | null = null;
+  private renderPromise: Promise<void> | null = null;
   private renderTask: PdfRenderTask | null = null;
   private rendered = false;
   private destroyed = false;
@@ -30,11 +28,9 @@ export class PageSurface {
     readonly element: HTMLElement,
     readonly pageNumber: number,
     private readonly page: PdfPage,
-    private readonly geometry: PageSurfaceGeometry,
+    private geometry: PageSurfaceGeometry,
     private readonly pointerHandlers: PageSurfacePointerHandlers
   ) {
-    this.cssWidth = geometry.cssViewport.width;
-    this.cssHeight = geometry.cssViewport.height;
     this.element.empty();
     this.element.addClass("is-mounted");
     this.element.style.width = `${this.cssWidth}px`;
@@ -42,23 +38,14 @@ export class PageSurface {
     this.element.dataset.page = String(pageNumber);
 
     this.pdfCanvas = this.element.createEl("canvas", {cls: "betterscore-pdf-canvas"});
-    this.pdfCanvas.width = Math.ceil(geometry.renderViewport.width);
-    this.pdfCanvas.height = Math.ceil(geometry.renderViewport.height);
-    this.pdfCanvas.style.width = `${this.cssWidth}px`;
-    this.pdfCanvas.style.height = `${this.cssHeight}px`;
-    const pdfContext = this.pdfCanvas.getContext("2d");
-    if (!pdfContext) throw new Error("PDF canvas is not available");
-    this.pdfContext = pdfContext;
+    this.pdfCanvas.width = 0;
+    this.pdfCanvas.height = 0;
 
     this.overlay = this.element.createEl("canvas", {cls: "betterscore-ink-canvas"});
-    this.overlay.width = Math.ceil(this.cssWidth * geometry.pixelRatio);
-    this.overlay.height = Math.ceil(this.cssHeight * geometry.pixelRatio);
-    this.overlay.style.width = `${this.cssWidth}px`;
-    this.overlay.style.height = `${this.cssHeight}px`;
     const annotationContext = this.overlay.getContext("2d");
     if (!annotationContext) throw new Error("Annotation canvas is not available");
-    annotationContext.scale(geometry.pixelRatio, geometry.pixelRatio);
     this.annotationContext = annotationContext;
+    this.sizeCanvases();
 
     this.overlay.addEventListener("pointerdown", this.handlePointerDown);
     this.overlay.addEventListener("pointermove", this.handlePointerMove);
@@ -67,21 +54,72 @@ export class PageSurface {
     this.overlay.addEventListener("lostpointercapture", this.handlePointerEnd);
   }
 
+  get cssWidth(): number { return this.geometry.cssViewport.width; }
+  get cssHeight(): number { return this.geometry.cssViewport.height; }
+
+  resize(cssScale: number, renderScale: number, pixelRatio: number): void {
+    this.geometry = {
+      cssViewport: this.page.getViewport({scale: cssScale}),
+      renderViewport: this.page.getViewport({scale: renderScale}),
+      pixelRatio
+    };
+    this.rendered = false;
+    this.renderTask?.cancel?.();
+    this.sizeCanvases();
+  }
+
+  private sizeCanvases(): void {
+    const {pixelRatio} = this.geometry;
+    for (const canvas of [this.pdfCanvas, this.overlay]) {
+      canvas.style.width = `${this.cssWidth}px`;
+      canvas.style.height = `${this.cssHeight}px`;
+    }
+    this.overlay.width = Math.ceil(this.cssWidth * pixelRatio);
+    this.overlay.height = Math.ceil(this.cssHeight * pixelRatio);
+    this.annotationContext.scale(pixelRatio, pixelRatio);
+  }
+
   async renderPdf(): Promise<void> {
     if (this.destroyed || this.rendered) return;
-    if (this.renderTask) return this.renderTask.promise;
-    const task = this.page.render({
-      canvasContext: this.pdfContext,
-      viewport: this.geometry.renderViewport
-    });
-    this.renderTask = task;
-    try {
-      await task.promise;
-      if (!this.destroyed) this.rendered = true;
-    } catch (error) {
-      if (!this.destroyed) throw error;
-    } finally {
-      if (this.renderTask === task) this.renderTask = null;
+    if (!this.renderPromise) {
+      this.renderPromise = this.renderLatestPdf().finally(() => {
+        this.renderPromise = null;
+      });
+    }
+    await this.renderPromise;
+  }
+
+  private async renderLatestPdf(): Promise<void> {
+    while (!this.destroyed && !this.rendered) {
+      const geometry = this.geometry;
+      // Keep the last good bitmap in the DOM until the sharp replacement is ready.
+      const canvas = this.element.ownerDocument.createElement("canvas");
+      canvas.className = "betterscore-pdf-canvas";
+      canvas.width = Math.ceil(geometry.renderViewport.width);
+      canvas.height = Math.ceil(geometry.renderViewport.height);
+      canvas.style.width = `${geometry.cssViewport.width}px`;
+      canvas.style.height = `${geometry.cssViewport.height}px`;
+      this.pendingCanvas = canvas;
+      try {
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("PDF canvas is not available");
+        const task = this.page.render({canvasContext: context, viewport: geometry.renderViewport});
+        this.renderTask = task;
+        await task.promise;
+        if (!this.destroyed && this.geometry === geometry) {
+          const previous = this.pdfCanvas;
+          previous.replaceWith(canvas);
+          previous.width = previous.height = 0;
+          this.pdfCanvas = canvas;
+          this.rendered = true;
+        }
+      } catch (error) {
+        if (!this.destroyed && this.geometry === geometry) throw error;
+      } finally {
+        if (this.pdfCanvas !== canvas) canvas.width = canvas.height = 0;
+        this.pendingCanvas = null;
+        this.renderTask = null;
+      }
     }
   }
 
@@ -144,7 +182,8 @@ export class PageSurface {
 
   getCanvasPixelArea(): number {
     return this.pdfCanvas.width * this.pdfCanvas.height
-      + this.overlay.width * this.overlay.height;
+      + this.overlay.width * this.overlay.height
+      + (this.pendingCanvas ? this.pendingCanvas.width * this.pendingCanvas.height : 0);
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {

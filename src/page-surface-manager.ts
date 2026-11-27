@@ -76,12 +76,14 @@ export class PageSurfaceManager {
   private readonly desiredPages = new Set<number>();
   private readonly queuedPages = new Set<number>();
   private readonly renderQueue: QueuedRender[] = [];
+  private readonly inFlightPages = new Set<number>();
   private readonly surfaceAccess = new Map<number, number>();
   private observer: IntersectionObserver | null = null;
   private activeRenders = 0;
   private cancelledRenders = 0;
   private currentPage = 1;
   private zoom = 1;
+  private estimatedPageGeometry: PdfViewport | null = null;
   private cacheStrategy: PageCacheStrategy = "continuous";
   private layoutState: ViewerState = createViewerState();
   private layoutGeneration = 0;
@@ -134,6 +136,7 @@ export class PageSurfaceManager {
       // pages replace the estimate with their exact geometry when mounted.
       const referenceViewport = await this.loadPageGeometry(this.currentPage);
       if (!this.isCurrentLayout(generation, revision)) return false;
+      this.estimatedPageGeometry = referenceViewport;
       for (const pageNumber of pages) {
         this.createSlot(
           pageNumber,
@@ -226,7 +229,7 @@ export class PageSurfaceManager {
     return this.zoom;
   }
 
-  /** Preview with existing canvases; rebuild them sharply just once, on release. */
+  /** Preview with existing canvases; request sharp bitmaps only on release. */
   startPinch(
     point: {x: number; y: number},
     commit: (zoom: number, anchor: ZoomAnchor) => void
@@ -282,16 +285,50 @@ export class PageSurfaceManager {
 
   async setZoom(zoom: number, anchor?: ZoomAnchor): Promise<number> {
     const normalized = clampZoom(zoom);
-    if (normalized === this.zoom) return this.zoom;
+    if (this.disposed || normalized === this.zoom) return this.zoom;
     this.zoom = normalized;
     this.updateZoomClass();
-    const applied = await this.setLayout(this.layoutState, true);
-    if (applied && anchor) {
+
+    const mode = this.layoutState.viewMode;
+    const visiblePages = mode === "continuous" ? null
+      : new Set(pagesForLayout(this.layoutState, this.pdf.numPages));
+    // Resize the existing layout synchronously so releasing a pinch never
+    // paints an empty frame between the preview and the committed zoom.
+    for (const [pageNumber, slot] of this.slots) {
+      const geometry = this.pageGeometry.get(pageNumber) ?? this.estimatedPageGeometry;
+      if (!geometry) continue;
+      const scales = this.scalesForPage(geometry, mode);
+      this.sizeSlot(slot, geometry, mode, scales, false);
+      const surface = this.surfaces.get(pageNumber);
+      if (!surface) continue;
+      if (visiblePages ? !visiblePages.has(pageNumber) : !this.desiredPages.has(pageNumber)) {
+        this.evictPage(pageNumber);
+        continue;
+      }
+      surface.resize(scales.cssScale, scales.renderScale, scales.pixelRatio);
+      this.callbacks.drawAnnotations(surface);
+    }
+
+    if (anchor) {
       const bounds = this.slots.get(anchor.page)?.getBoundingClientRect();
       if (bounds?.width && bounds.height) {
         this.container.scrollLeft += bounds.left + bounds.width * anchor.x - anchor.clientX;
         this.container.scrollTop += bounds.top + bounds.height * anchor.y - anchor.clientY;
       }
+    } else if (mode === "continuous") {
+      this.positionSlot(this.currentPage, "auto");
+    } else {
+      this.container.scrollTo({left: 0, top: 0, behavior: "auto"});
+    }
+
+    this.requestRender(anchor?.page ?? this.currentPage, true);
+    if (visiblePages) {
+      for (const pageNumber of visiblePages) this.requestRender(pageNumber, true);
+      // A larger zoom may make a formerly full cache exceed its budget.
+      await this.updatePagedLayout(this.layoutState);
+    } else {
+      for (const pageNumber of this.desiredPages) this.requestRender(pageNumber);
+      this.scheduleCurrentPageUpdate();
     }
     return this.zoom;
   }
@@ -380,6 +417,7 @@ export class PageSurfaceManager {
     this.surfaceAccess.clear();
     this.mounting.clear();
     this.slots.clear();
+    this.estimatedPageGeometry = null;
     this.container.empty();
   }
 
@@ -519,6 +557,10 @@ export class PageSurfaceManager {
           : "betterscore-spread-left");
       }
     }
+    const orderedSlots = Array.from(this.container.children).filter((element) =>
+      visible.has(Number((element as HTMLElement).dataset.page))
+    );
+    if (visiblePages.every((pageNumber, index) => this.slots.get(pageNumber) === orderedSlots[index])) return;
     for (const pageNumber of visiblePages) {
       const slot = this.slots.get(pageNumber);
       if (slot) this.container.appendChild(slot);
@@ -646,13 +688,19 @@ export class PageSurfaceManager {
 
   private drainRenderQueue(): void {
     while (!this.disposed && this.activeRenders < MAX_CONCURRENT_RENDERS) {
-      const queued = this.renderQueue.shift();
+      // Never let repeated requests for one page occupy both render slots.
+      const index = this.renderQueue.findIndex(({pageNumber}) => !this.inFlightPages.has(pageNumber));
+      if (index === -1) return;
+      const [queued] = this.renderQueue.splice(index, 1);
       if (!queued) return;
       this.queuedPages.delete(queued.pageNumber);
       if (!this.desiredPages.has(queued.pageNumber)) continue;
       if (!this.isCurrentGeneration(queued.generation)) continue;
+      if (this.surfaces.get(queued.pageNumber)?.isPdfRendered()) continue;
       this.activeRenders += 1;
+      this.inFlightPages.add(queued.pageNumber);
       void this.renderRequestedPage(queued).finally(() => {
+        this.inFlightPages.delete(queued.pageNumber);
         this.activeRenders -= 1;
         this.drainRenderQueue();
       });

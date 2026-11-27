@@ -69,6 +69,98 @@ test("continuous cold-open only requests the active page before becoming ready",
   }
 });
 
+for (const viewMode of ["continuous", "single", "spread"] as const) {
+  test(`${viewMode} zoom keeps the page and ink mounted until the latest PDF bitmap is ready`, async () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const originalObserver = Object.getOwnPropertyDescriptor(globalThis, "IntersectionObserver");
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        devicePixelRatio: 1,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        requestAnimationFrame: () => 1,
+        cancelAnimationFrame: () => undefined
+      }
+    });
+    Object.defineProperty(globalThis, "IntersectionObserver", {
+      configurable: true,
+      value: FakeIntersectionObserver
+    });
+
+    let defer = false;
+    const pending: (() => void)[] = [];
+    const page: PdfPage = {
+      getViewport: ({scale}) => ({width: 600 * scale, height: 900 * scale}),
+      render: () => ({promise: new Promise<void>((resolve) => {
+        if (defer) pending.push(resolve);
+        else resolve();
+      })})
+    };
+    const container = new FakeElement(1024, 768);
+    let annotationDraws = 0;
+    const manager = new PageSurfaceManager(
+      container as unknown as HTMLElement,
+      {numPages: viewMode === "spread" ? 2 : 1, getPage: async () => page, destroy: async () => {}},
+      {
+        onPointerDown: () => {},
+        onPointerMove: () => {},
+        onPointerEnd: () => {},
+        drawAnnotations: (surface) => {
+          if (surface.pageNumber === 1) annotationDraws++;
+        }
+      }
+    );
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    try {
+      await manager.setLayout({viewMode, currentPage: 1, spreadOffset: 1});
+      await flush();
+      const slot = container.children.find((child) => child.dataset.page === "1")!;
+      const [bitmap, ink] = slot.children;
+      assert.ok(bitmap && ink);
+      const originalWidth = bitmap.width;
+      assert.ok(originalWidth > 0);
+      defer = true;
+
+      // Exercise the same anchored handoff that runs on finger release.
+      const pinch = manager.startPinch({x: 100, y: 100}, (zoom, anchor) => {
+        void manager.setZoom(zoom, anchor);
+      });
+      assert.ok(pinch);
+      pinch.preview(1.5);
+      pinch.finish(1.5);
+      await flush();
+      assert.equal(pending.length, viewMode === "spread" ? 2 : 1);
+      assert.equal(slot.children[0], bitmap);
+      assert.equal(bitmap.width, originalWidth);
+      assert.equal(slot.children[1], ink);
+      assert.equal(annotationDraws, 2);
+
+      await manager.setZoom(2);
+      for (const resolve of pending.splice(0)) resolve();
+      await flush();
+      assert.equal(slot.children[0], bitmap, "an obsolete render must not replace the displayed bitmap");
+      assert.equal(pending.length, viewMode === "spread" ? 2 : 1);
+      for (const resolve of pending.splice(0)) resolve();
+      await flush();
+      const [replacement] = slot.children;
+      assert.ok(replacement);
+      assert.notEqual(replacement, bitmap);
+      assert.ok(Math.abs(replacement.width - originalWidth * 2) <= 1);
+      assert.equal(bitmap.width, 0, "the superseded bitmap must release its backing store");
+      assert.equal(slot.children[1], ink);
+      assert.equal(manager.getCurrentPage(), 1);
+    } finally {
+      manager.dispose();
+      defer = false;
+      for (const resolve of pending) resolve();
+      await flush();
+      restoreGlobal("window", originalWindow);
+      restoreGlobal("IntersectionObserver", originalObserver);
+    }
+  });
+}
+
 class FakeIntersectionObserver {
   observe(): void {}
   disconnect(): void {}
@@ -81,6 +173,35 @@ class FakeElement {
   readonly style: Record<string, string> = {};
   readonly classes = new Set<string>();
   scrollTop = 0;
+  scrollLeft = 0;
+  width = 0;
+  height = 0;
+  readonly ownerDocument = {createElement: () => new FakeElement()};
+
+  getContext() { return {scale: () => undefined}; }
+
+  createEl(): FakeElement { return this.createDiv(); }
+
+  appendChild(child: FakeElement): void {
+    child.remove();
+    child.parent = this;
+    this.children.push(child);
+  }
+
+  replaceWith(next: FakeElement): void {
+    if (!this.parent) return;
+    const index = this.parent.children.indexOf(this);
+    this.parent.children[index] = next;
+    next.parent = this.parent;
+    this.parent = null;
+  }
+
+  remove(): void {
+    if (!this.parent) return;
+    const index = this.parent.children.indexOf(this);
+    if (index !== -1) this.parent.children.splice(index, 1);
+    this.parent = null;
+  }
   parent: FakeElement | null = null;
 
   constructor(readonly clientWidth = 0, readonly clientHeight = 0) {}
